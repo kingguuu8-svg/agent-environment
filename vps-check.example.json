@@ -1,0 +1,13 @@
+{
+  "targets": {
+    "gateway": {
+      "host": "ubuntu@192.0.2.10",
+      "identity_file": "/home/you/.ssh/gateway_key"
+    },
+    "target": {
+      "host": "user@192.0.2.20",
+      "identity_file": "/home/you/.ssh/target_key",
+      "python": "python3.11"
+    }
+  }
+}

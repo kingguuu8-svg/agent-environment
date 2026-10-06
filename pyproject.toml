@@ -1,0 +1,15 @@
+[project]
+name = "remote-mcp-demo"
+version = "0.1.0"
+description = "Prototype: SSH bootstrap and native MCP tool forwarding"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp==1.26.0",
+    "uvicorn>=0.34,<1",
+]
+
+[dependency-groups]
+dev = ["ruff>=0.12,<1"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
