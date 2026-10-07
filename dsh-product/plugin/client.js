@@ -4,7 +4,7 @@ window.__ModuleLoader__.load({
     const React = require("react");
     const { Modal } = require("@deepseek-ai/dsh-client-ui-primitives");
     const h = React.createElement;
-    const { useState, useEffect, useRef, useSyncExternalStore } = React;
+    const { useState, useEffect, useRef, useMemo, useSyncExternalStore } = React;
     const inject = ["connection", "sessions", "workspaces", "slots", "uiWorkspace", "layout", "sidebarRight", "inputTriggers"];
 
     class CloudConnectionError extends Error {
@@ -581,6 +581,30 @@ window.__ModuleLoader__.load({
       // actual execution binding through the same environment entry everywhere.
       ctx.slots.inject("conversation.session.header.actions", () => ctx.slots.register({ name: "conversation.session.header.actions", id: "agent-preset", priority: -100 }, () => h(React.Fragment)));
       ctx.slots.inject("conversation.input.permission", () => ctx.slots.register({ name: "conversation.input.permission", id: "remote-tool-permissions", priority: -100 }, () => h("span", { className: "rw-meta", title: "工具使用所选机器登录用户的系统权限。工作区决定相对路径；文件侧栏限定在该目录内。" }, "目标用户权限")));
+      ctx.slots.inject("tool.call.toolview", () => {
+        let installed = false, disposeView;
+        const install = () => {
+          if (installed) return;
+          const native = ctx.slots.entriesOfSlot("tool.call.toolview").find((entry) => entry.options.key === "edit");
+          if (!native) return;
+          installed = true;
+          const NativeEdit = native.component;
+          function PiEditView(props) {
+            const block = useMemo(() => {
+              const diff = props.block.meta?.remotePi?.diff;
+              if (props.phase !== "result" || props.block.isError || typeof diff !== "string" || !diff) return props.block;
+              // Show the exact applied Pi diff alongside its original output.
+              // Argument text cannot establish what a fuzzy edit really changed.
+              return { ...props.block, content: [...props.block.content, { type: "text", text: "修改差异：\n" + diff }] };
+            }, [props.block, props.phase]);
+            return h(NativeEdit, { ...props, block });
+          }
+          disposeView = ctx.slots.register({ name: "tool.call.toolview", key: "edit", priority: -100, locale: native.locale }, PiEditView);
+        };
+        install();
+        const disposeWatch = ctx.slots.subscribe("tool.call.toolview", install);
+        return () => { disposeWatch(); disposeView?.(); };
+      });
       for (const seat of ["conversation.hero.workspace.directoryFlow", "sidebar.workspaces.directoryFlow"]) {
         ctx.slots.inject(seat, () => ctx.slots.register({ name: seat, id: "remote-directory", priority: -100 }, WorkspaceDirectoryFlow));
       }

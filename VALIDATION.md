@@ -16,6 +16,8 @@
 | 文件侧栏与引用菜单切换顺序 | `verify_dsh_files.mjs`，实际客户端组件、原生文件树、引用控制器与 Store、React 渲染器 | 8 项通过 |
 | 远端文件补全与实际引用读取 | `verify_dsh_references.py`，独立 Host、loopback SSH、本地 SSE 模型与真实 Pi 工具 | 10 项通过 |
 | 原生搜索、工具更新与迟到结果 | `verify_workspace_references.mjs`，锁定的 DSH 搜索、实际 MCP worker 与 Host 路由 | 7 项通过 |
+| Pi 结果、图片、并发、取消与重启 | `verify_dsh_pi_results.py`，实际 Host、loopback SSH、本地 SSE 模型与真实 Pi 工具 | 7 项通过 |
+| 实际编辑差异的原生展示 | `verify_dsh_pi_views.mjs`，SSH 验证结果、原生工具行、SlotCore 与 React 渲染器 | 7 项通过 |
 | 启动等待、取消与登录恢复 | `verify_dsh_launcher.py`，独立 Host、loopback SSH、真实 Linux 用户服务 | 16 项通过 |
 | 既有 Pi MCP 工具行为 | `verify_local.py`，独立 loopback sshd | 23 项通过 |
 | 既有远端工作区入口 | `verify_workspace_local.py`，两个并行目录与 HTTP MCP | 11 项通过 |
@@ -175,6 +177,24 @@ Host 现在将绑定会话的原生补全请求发送到当前目标 worker，�
 空闲维护更新了 VPS4 的五份 Host、客户端、插件清单与 worker 源码，并同步 VPS1 的两份 worker 源码，备份保留。运行源码哈希与本地一致；35 个已有会话的五项投影与绑定、7 个工作区分组、机器目录及六份配置保持，26 个原控制者恢复。云端、桌面与 VPS1 的原生 `fileReferences/list` 返回真实候选，与同一目标的原生目录列表一致；查看请求保持控制关系。产品原页面只读刷新后保留会话、执行位置和查看权限，输入框保持为空。生产验证没有发送消息、切换工作区或接管。
 
 本轮证据位于 `.local/verification-dsh-references-before.json`、`.local/verification-dsh-references.json`、`.local/verification-dsh-references-ui.json` 和 `.local/verification-dsh-references-deployed.json`。VPS4 备份位于 `dsh-state/backups/file-references-*`，VPS1 为 `backups/file-references-*`；按各自 `manifest.json` 恢复源码与权限，在 VPS4 重启 Host 即可回滚。模糊搜索沿用上游后台刷新时的旧索引行为，目录查询读取实时目录。macOS、Windows 真机仍待验证。
+
+## Web 编辑差异
+
+2026 年 10 月 8 日，隔离环境中的真实 Pi `read`、`write`、`edit` 均成功，独立读取远端文件也确认修改生效，但展开原生编辑行只能看到成功文本。Host 在转换 Pi 结果时丢弃了实际执行的 `details`，会话因此没有保存差异。
+
+本轮保留 Pi 的执行详情，通过 DSH 支持的 `output.presentationMeta` 写入原生工具结果事件的 `meta.remotePi`。客户端在公开工具视图插槽中委托原生编辑行，只为带有实际差异的成功结果追加显示文本。原消息与模型工具参数保持原值；展示使用 Pi 返回的实际差异，保留中文、空格文件名和原生文件打开入口。
+
+`verify_dsh_pi_results.py` 的 7 项检查核对真实 SSH 编辑后的差异、补丁、执行机器与目录，并独立比较两个目标的文件。录制模型请求确认工具参数与锁定清单一致、结果文本保持原值，展示元数据未进入模型消息。其他检查覆盖失败编辑、真实 PNG 的持久存储与模型图片投影、云端与远端并行编辑、取消远端命令后实际 shell PID 消失，以及 Host 重启后原结果和输入权恢复、模型请求未重放。图片样本最初因校验和错误被 Pi 拒绝；修正有效 PNG 后完整链路通过。
+
+`verify_dsh_pi_views.mjs` 读取上述集成结果，通过实际 DSH FileMutationRow、SlotCore 与 React 渲染器验证展示。7 项覆盖准确差异与原结果、旧记录和失败结果、准备与执行阶段、HTML 形式的文件内容保持普通文本、中文文件入口、插件卸载恢复及原生视图迟注册。旧发布客户端在同一检查中复现缺少实际差异。先运行 `verify_dsh_pi_results.py` 生成本地结果，再运行 `node verify_dsh_pi_views.mjs`；界面验证沿用已有开发依赖。
+
+6 项隔离浏览器与集成检查确认真实远端工具副作用、原生行显示原结果及准确差异、文件入口打开远端新内容、查看模式保持，以及刷新和 Host 重启后的恢复。模型请求数保持为 6，包含两次准备历史请求和四次工具轮次请求。相关回归通过：远端引用 10 项、上下文与接力 18 项、输入权恢复 7 项、原生文件与引用组件 8 项、客户端异常 4 项及多窗口恢复 13 项。JavaScript 语法、Python lint、格式与 diff 检查通过；临时服务、目录与浏览器页已清理。
+
+本轮证据位于 `.local/verification-dsh-pi-results-before.json`、`.local/verification-dsh-pi-results.json` 和 `.local/verification-dsh-pi-results-web.json`。旧会话缺少当时的编辑差异，继续使用原展示。原生图片投影的规范值比较仍由上游执行，适配层在比较时移除展示字段。验证覆盖当前 Linux 环境；macOS、Windows 真机仍待验证。
+
+空闲维护仅更新 VPS4 的结果适配模块、Host、客户端和插件清单四份文件，原件与权限记录保留。运行源码哈希与验证版本一致；35 个已有会话的五项投影、绑定和原生日志、7 个工作区分组、机器清单与六份配置保持。26 个原控制者恢复，随机查看者保持只读；云端、桌面与 VPS1 的原生文件列表、引用候选及工具探测通过。部署证据位于 `.local/verification-dsh-pi-results-deployed.json`，备份位于 VPS4 的 `dsh-state/backups/pi-results-*`。按 `manifest.json` 恢复文件与权限、移除此前不存在的适配模块，再重启 Host 即可回滚。
+
+生产原页面只读刷新后，标题、工作区与查看权限保持，目标已连接，输入框为空。生产检查未发送消息、切换工作区或接管输入。
 
 ## 设备安装
 

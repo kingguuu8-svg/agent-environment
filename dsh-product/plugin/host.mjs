@@ -14,6 +14,7 @@ import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import lockfile from "proper-lockfile";
 import { Environment, readJson, writeJson } from "../../environment.mjs";
+import { createPiToolDefinition } from "../pi-tool-result.mjs";
 
 export const name = "remote-workspaces";
 export const inject = ["agents", "sessions", "sessionController", "sessionProjections", "tools", "systemPrompt", "workspaceFiles", "workspaceRegistry", "fileReferences"];
@@ -112,7 +113,7 @@ export class RemoteWorkspaces extends TypertRemoteService {
       return { ...result, sections: result.sections.map((section) => section.name === "remote-workspace" ? { ...section, text: workspacePrompt(context) } : section) };
     });
     for (const descriptor of this.environment.manifest) {
-      ctx.tools.register(createMcpToolDefinition(ctx, {
+      ctx.tools.register(createPiToolDefinition(ctx, {
         ...descriptor, rawName: descriptor.name,
         call: async (args, execution) => {
           const state = this.state(execution.agent?.session);
@@ -423,7 +424,9 @@ export class RemoteWorkspaces extends TypertRemoteService {
     const descriptor = this.environment.descriptors(id).find((tool) => tool.name === name);
     if (!descriptor) throw new Error(`Unknown tool ${name} on ${id}`);
     const result = await this.environment.definition(id, descriptor).execute(randomUUID(), args, signal);
-    return { content: result.content, ...(result.details?.structuredContent ? { structuredContent: result.details.structuredContent } : {}) };
+    return { content: result.content,
+      ...(this.environment.get(id).kind !== "mcp" ? { _meta: { "remote/pi": result.details } } : {}),
+      ...(result.details?.structuredContent ? { structuredContent: result.details.structuredContent } : {}) };
   }
   reloadTargets() { this.environment.configuration = readJson(this.environment.config, {}); }
   async preflight(id, signal) {

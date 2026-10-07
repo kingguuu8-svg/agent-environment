@@ -64,6 +64,8 @@ dsh web --remote --foreground --no-open
 
 默认的 `read`、`write`、`edit`、`bash`、`grep`、`find`、`ls` 都来自 `@earendil-works/pi-coding-agent@1.0.2`。MCP 负责传输工具调用与取消，目标进程负责执行。工作区决定相对路径的起点，工具使用目标登录用户的系统权限。界面中的“目标用户权限”说明这一点；VPS1 目前使用 root。
 
+展开成功的 `edit` 工具行，可以看到 Pi 实际应用的修改差异，并通过文件名打开当前远端文件。差异随会话保存在 VPS4，刷新或服务重启后仍可查看。失败编辑显示原错误；旧历史沿用原展示，因为当时没有保存差异。模型继续收到 Pi 的原始结果文本。
+
 Agent 还有一个 `environment` 工具，可以列出已经登记的工作区与 MCP 服务，或明确调用其中一个目标的工具。例如可以让它在本机项目工作时，同时检查云端服务。显式跨目标调用保持会话的默认工作区。
 
 额外 HTTP MCP 服务可写入 VPS4 的 `dsh-targets.json` 中的 `mcp` 字段，重启 Host 后生效；格式与已有 `environment.mjs` 一致。新机器登记后，目录选择器重新读取配置，无需重启 Host。
