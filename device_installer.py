@@ -684,7 +684,17 @@ def install(args):
                     ],
                     capture=True,
                     timeout=250,
-                    input=json.dumps({"workspace": str(Path.cwd())}) + "\n",
+                    input=json.dumps(
+                        {
+                            "workspace": str(Path.cwd()),
+                            **(
+                                {"pairingId": pairing["pairingId"]}
+                                if existing and pairing["expiresAt"] > time.time()
+                                else {}
+                            ),
+                        }
+                    )
+                    + "\n",
                 )
                 ready = json.loads(raw)
                 if ready.get("type") != "ready":
@@ -698,6 +708,8 @@ def install(args):
                 f"设备已登记，连接尚未就绪。修复后重跑安装器即可继续。\n{last}"
             )
         say(f"接入成功：{args.name or socket.gethostname()}。会话保存在 VPS4。")
+        if ready.get("onboardingError"):
+            say("本机连接已恢复，页面接入进度暂未更新：" + ready["onboardingError"])
         if str(bin_dir) not in os.environ.get("PATH", "").split(os.pathsep):
             if os.name == "nt":
                 from device_services import literal, powershell

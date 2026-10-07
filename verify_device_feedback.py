@@ -157,6 +157,11 @@ def verify(args, base):
                 api.remote(
                     "deviceInstallerStatus", {"pairingId": invalid}, rejected=True
                 )
+                api.remote(
+                    "deviceInstallerConfirm",
+                    {"pairingId": invalid, "machine": "device"},
+                    rejected=True,
+                )
             request = urllib.request.Request(
                 api.origin + "/api/remoteWorkspaces/deviceInstallerStatus",
                 data=json.dumps(
@@ -177,6 +182,29 @@ def verify(args, base):
                 assert error.code in {401, 403}, error.code
             else:
                 raise AssertionError("Anonymous client could inspect pairing progress")
+            request.full_url = (
+                api.origin + "/api/remoteWorkspaces/deviceInstallerConfirm"
+            )
+            request.data = json.dumps(
+                {
+                    "type": "client-request",
+                    "rpcId": str(uuid.uuid4()),
+                    "method": "remoteWorkspaces/deviceInstallerConfirm",
+                    "payload": {
+                        "args": {"request": {"pairingId": pairing, "machine": "device"}}
+                    },
+                }
+            ).encode()
+            try:
+                urllib.request.build_opener(urllib.request.ProxyHandler({})).open(
+                    request, timeout=5
+                )
+            except urllib.error.HTTPError as error:
+                assert error.code in {401, 403}, error.code
+            else:
+                raise AssertionError(
+                    "Anonymous client could confirm an existing device"
+                )
             passed(
                 "invalid identities and anonymous installer progress requests are rejected"
             )
@@ -235,6 +263,63 @@ def verify(args, base):
             assert any(item["name"] == "AGENTS.md" for item in listing["entries"])
             passed(
                 "automatic retry reaches online through real Pi workspace tools and permits browsing the reported device directory"
+            )
+            acknowledged = uuid.uuid4().hex
+            save(
+                state / "pairing" / acknowledged / "receipt.json",
+                {"expiresAt": int(time.time()) + 900, "targetOs": "linux"},
+            )
+            assert (
+                api.remote("deviceInstallerStatus", {"pairingId": acknowledged})[
+                    "phase"
+                ]
+                == "waiting"
+            )
+            entry = json.loads(
+                subprocess.check_output(
+                    [
+                        args.node,
+                        str(ROOT / "dsh-entry.mjs"),
+                        "--state",
+                        str(state),
+                        "--machine",
+                        "device",
+                    ],
+                    input=json.dumps(
+                        {"pairingId": acknowledged, "machine": "spoofed"}
+                    ).encode(),
+                    timeout=20,
+                )
+            )
+            assert entry["type"] == "ready" and entry["machine"] == "device"
+            assert entry["onboarding"]["machine"]["id"] == "device"
+            assert (
+                api.remote("deviceInstallerStatus", {"pairingId": acknowledged})[
+                    "connection"
+                ]["status"]
+                == "online"
+            )
+            failed_confirmation = json.loads(
+                subprocess.check_output(
+                    [
+                        args.node,
+                        str(ROOT / "dsh-entry.mjs"),
+                        "--state",
+                        str(state),
+                        "--machine",
+                        "device",
+                    ],
+                    input=json.dumps({"pairingId": "invalid"}).encode(),
+                    timeout=20,
+                )
+            )
+            assert (
+                failed_confirmation["type"] == "ready"
+                and failed_confirmation["onboardingError"]
+            )
+            assert failed_confirmation["url"] == entry["url"]
+            passed(
+                "the permanent entry confirms its fixed machine, ignores caller identity and preserves Web access when feedback fails"
             )
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:

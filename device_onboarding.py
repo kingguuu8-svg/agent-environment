@@ -224,6 +224,41 @@ def status(runtime, state, pairing_id):
         }
 
 
+def confirm_existing(runtime, state, pairing_id, machine):
+    if not isinstance(pairing_id, str) or not re.fullmatch(r"[a-f0-9]{32}", pairing_id):
+        raise ValueError("Invalid pairing identity")
+    if not isinstance(machine, str) or not re.fullmatch(
+        r"[a-z][a-z0-9_]{0,47}", machine
+    ):
+        raise ValueError("Invalid device identity")
+    with locked(state / "pairing.lock"), locked(runtime / "dsh-targets.lock"):
+        path = state / "pairing" / pairing_id / "receipt.json"
+        if not path.exists():
+            raise ValueError("找不到安装器记录，请重新下载安装器。")
+        receipt = json.loads(path.read_text())
+        target = json.loads((runtime / "dsh-targets.json").read_text())["targets"].get(
+            machine
+        )
+        if target is None:
+            raise ValueError("设备尚未登记，请重新运行安装器。")
+        previous = receipt.get("result", {})
+        if previous and previous.get("machine") != machine:
+            raise ValueError("此安装器已用于另一台设备，请重新下载。")
+        if receipt.get("targetOs", "linux") != target.get("platform", "linux"):
+            raise ValueError("安装包与设备操作系统不匹配。")
+        if not receipt.get("complete"):
+            if receipt["expiresAt"] <= time.time():
+                raise ValueError("安装器已过期，请在 Web 页面重新下载。")
+            # The permanent SSH entry fixes the machine identity. A fresh
+            # receipt is consumed without changing that device's registration.
+            if not previous:
+                receipt["result"] = {"machine": machine, "cloudPort": target["port"]}
+                receipt["confirmedBy"] = machine
+            receipt["complete"] = True
+            save(path, receipt)
+    return status(runtime, state, pairing_id)
+
+
 def validate_request(request):
     if not isinstance(request, dict):
         raise ValueError("Invalid device registration")
@@ -294,6 +329,8 @@ def pair(runtime, state, user_home, pairing_id, request):
             raise ValueError("安装器已过期，请在 Web 页面重新下载。")
         if request.get("platform", "linux") != receipt.get("targetOs", "linux"):
             raise ValueError("安装包与设备操作系统不匹配。")
+        if receipt.get("confirmedBy"):
+            raise ValueError("此安装器已用于已接入设备，请重新下载。")
         fingerprint = hashlib.sha256(
             json.dumps(request, sort_keys=True).encode()
         ).hexdigest()
@@ -403,10 +440,11 @@ def pair(runtime, state, user_home, pairing_id, request):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["create", "pair", "status"])
+    parser.add_argument("action", choices=["create", "pair", "status", "confirm"])
     parser.add_argument("--runtime", type=Path, required=True)
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--pairing")
+    parser.add_argument("--machine")
     parser.add_argument(
         "--platform", default="linux", choices=["linux", "mac", "windows"]
     )
@@ -415,6 +453,8 @@ def main():
         result = create(args.runtime, args.state, Path.home(), args.platform)
     elif args.action == "status":
         result = status(args.runtime, args.state, args.pairing)
+    elif args.action == "confirm":
+        result = confirm_existing(args.runtime, args.state, args.pairing, args.machine)
     else:
         request = json.loads(sys.stdin.buffer.read(65537))
         result = pair(args.runtime, args.state, Path.home(), args.pairing, request)

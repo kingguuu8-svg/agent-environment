@@ -229,6 +229,13 @@ export class RemoteWorkspaces extends TypertRemoteService {
     }
     return { ...result, connection: check.value };
   }
+  async deviceInstallerConfirm(request, signal) {
+    checkRequest(request);
+    if (typeof request.pairingId !== "string" || !/^[a-f0-9]{32}$/.test(request.pairingId)) fail("Invalid pairing identity");
+    if (typeof request.machine !== "string" || !/^[a-z][a-z0-9_]{0,47}$/.test(request.machine)) fail("Invalid device identity");
+    const { stdout } = await execute(this.python, [join(this.runtimeDir, "device_onboarding.py"), "confirm", "--runtime", this.runtimeDir, "--state", this.stateDir, "--pairing", request.pairingId, "--machine", request.machine], { signal, timeout: 5000, maxBuffer: 65536 });
+    return JSON.parse(stdout);
+  }
   connectionState(id) {
     const checked = this.connectionChecks.get(id);
     if (this.checkingConnections.has(id)) return { ...checked, status: "checking" };
@@ -460,7 +467,7 @@ export class RemoteWorkspaces extends TypertRemoteService {
 }
 
 // Native JS decorators keep this plugin on DSH's authenticated Typert RPC carrier.
-for (const method of ["catalog", "deviceInstaller", "deviceInstallerStatus", "browse", "pick", "get", "probe", "control", "switch", "discardSwitch", "input"]) {
+for (const method of ["catalog", "deviceInstaller", "deviceInstallerStatus", "deviceInstallerConfirm", "browse", "pick", "get", "probe", "control", "switch", "discardSwitch", "input"]) {
   Remote(RemoteWorkspaces.prototype[method], { kind: "method", name: method, private: false, static: false, addInitializer: (initializer) => invocationInitializers.push(initializer) });
 }
 

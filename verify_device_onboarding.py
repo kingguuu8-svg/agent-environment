@@ -19,7 +19,7 @@ from pathlib import Path
 
 from build_device_installer import bundle
 from device_installer import download_bytes, fd_archive
-from device_onboarding import create, pair, save, status
+from device_onboarding import confirm_existing, create, pair, save, status
 
 ROOT = Path(__file__).resolve().parent
 
@@ -512,6 +512,80 @@ def run():
         assert "__" not in boundary["machine"] and len(boundary["machine"]) <= 32
         passed(
             "long hostnames ending at a separator produce a valid gateway machine identity"
+        )
+        acknowledged, _ = issue()
+        configuration = (runtime / "dsh-targets.json").read_bytes()
+        authorization = (user_home / ".ssh/authorized_keys").read_bytes()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+            confirmations = list(
+                pool.map(
+                    lambda _: confirm_existing(
+                        runtime, state, acknowledged, first["machine"]
+                    ),
+                    range(3),
+                )
+            )
+        assert confirmations[0] == confirmations[1] == confirmations[2]
+        assert confirmations[0]["phase"] == "registered"
+        assert confirmations[0]["machine"]["id"] == first["machine"]
+        assert (runtime / "dsh-targets.json").read_bytes() == configuration
+        assert (user_home / ".ssh/authorized_keys").read_bytes() == authorization
+        rejected(
+            lambda: confirm_existing(
+                runtime, state, acknowledged, results[2]["machine"]
+            ),
+            "另一台",
+        )
+        passed(
+            "an existing device consumes a fresh installer idempotently under parallel confirmation without changing targets or SSH permissions"
+        )
+        rejected(
+            lambda: pair(
+                runtime, state, user_home, acknowledged, copy.deepcopy(request)
+            ),
+            "已用于",
+        )
+        receipt_path = state / "pairing" / acknowledged / "receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["expiresAt"] = int(time.time()) - 1
+        save(receipt_path, receipt)
+        assert (
+            confirm_existing(runtime, state, acknowledged, first["machine"])["phase"]
+            == "registered"
+        )
+        passed(
+            "a confirmed installer cannot register another device and its registered status survives expiry"
+        )
+        expired, _ = issue()
+        receipt_path = state / "pairing" / expired / "receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["expiresAt"] = int(time.time()) - 1
+        save(receipt_path, receipt)
+        before = receipt_path.read_bytes()
+        rejected(
+            lambda: confirm_existing(runtime, state, expired, first["machine"]),
+            "已过期",
+        )
+        assert receipt_path.read_bytes() == before
+        incompatible, _ = issue("mac")
+        rejected(
+            lambda: confirm_existing(runtime, state, incompatible, first["machine"]),
+            "不匹配",
+        )
+        for invalid in [None, 123, [], "../machine"]:
+            rejected(
+                lambda value=invalid: confirm_existing(
+                    runtime, state, incompatible, value
+                ),
+                "Invalid",
+            )
+        rejected(
+            lambda: confirm_existing(runtime, state, incompatible, "unknown"),
+            "尚未登记",
+        )
+        assert (runtime / "dsh-targets.json").read_bytes() == configuration
+        passed(
+            "expired or incompatible packages and invalid or unknown devices are rejected before any registration change"
         )
     report = ROOT / ".local/verification-device-onboarding.json"
     report.parent.mkdir(exist_ok=True)

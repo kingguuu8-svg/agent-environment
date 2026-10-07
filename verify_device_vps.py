@@ -123,9 +123,10 @@ try:
  save(state/'anchors.json',{k:v for k,v in anchors.items() if v.get('machine') not in machines})
  for key in removed:
   shutil.rmtree(state/'workspaces'/key,ignore_errors=True)
- receipt=state/'pairing'/p['pairingId']/'receipt.json'
- if receipt.exists():
-  authorized(pathlib.Path.home(),remove=['remote-dsh-pair-'+receipt.parent.name]);shutil.rmtree(receipt.parent)
+ for pairing in p['pairingIds']:
+  receipt=state/'pairing'/pairing/'receipt.json'
+  if receipt.exists():
+   authorized(pathlib.Path.home(),remove=['remote-dsh-pair-'+receipt.parent.name]);shutil.rmtree(receipt.parent)
 finally:subprocess.run(['systemctl','--user','start','remote-dsh.service'],check=True,capture_output=True)
 print(json.dumps({'removedMachines':len(machines)}))
 """
@@ -139,6 +140,7 @@ def run(args):
     name = "dshcheck-" + uuid.uuid4().hex[:12]
     checks = []
     prepared, identity, pairing_id = None, None, None
+    pairing_ids = []
     failed = True
 
     def passed(message):
@@ -152,6 +154,7 @@ def run(args):
             json.loads(zlib.decompress(base64.b64decode(packed)))["pairing.json"]
         )
         pairing_id = pairing["pairingId"]
+        pairing_ids.append(pairing_id)
         assert re.fullmatch(r"[a-f0-9]{32}", pairing_id)
         assert package["pairingId"] == pairing_id
         assert (
@@ -185,6 +188,29 @@ def run(args):
         assert identity == again
         passed(
             "rerunning installer reuses device identity, ports and running background jobs"
+        )
+        fresh = api.remote("deviceInstaller", {"platform": "linux"})
+        pairing_ids.append(fresh["pairingId"])
+        assert (
+            api.remote("deviceInstallerStatus", {"pairingId": fresh["pairingId"]})[
+                "phase"
+            ]
+            == "waiting"
+        )
+        replace_package = "import json,pathlib,sys;p=json.load(sys.stdin);file=pathlib.Path(p['home'])/'dsh-connect-linux.sh';assert file.exists();file.write_text(p['installer']);print('{}')"
+        python_run(target, replace_package, {**prepared, "installer": fresh["content"]})
+        assert json.loads(python_run(target, INSTALL, prepared)) == identity
+        acknowledged = wait_for(
+            lambda: api.remote(
+                "deviceInstallerStatus", {"pairingId": fresh["pairingId"]}
+            ),
+            lambda value: value.get("connection", {}).get("status") == "online",
+            timeout=30,
+        )
+        assert acknowledged["machine"]["id"] == identity["machine"]
+        assert acknowledged["phase"] == "registered"
+        passed(
+            "a fresh package on an installed device reports the original device as online and preserves identity, ports and both jobs"
         )
         api.remote("catalog", {})
         machine = identity["machine"]
@@ -257,6 +283,7 @@ print('{}')
                     {
                         "name": name,
                         "pairingId": pairing_id,
+                        "pairingIds": pairing_ids,
                         "prepared": prepared,
                         "identity": identity,
                     }
@@ -288,7 +315,9 @@ print('{}')
                     assert not api.remote("get", {"sessionId": item["sessionId"]})[
                         "running"
                     ], "Cloud became busy before test cleanup"
-                python_run(cloud, CLEAN_CLOUD, {"name": name, "pairingId": pairing_id})
+                python_run(
+                    cloud, CLEAN_CLOUD, {"name": name, "pairingIds": pairing_ids}
+                )
         finally:
             python_run(target, CLEAN_TARGET, {"name": name})
     report = ROOT / ".local/verification-device-vps.json"
