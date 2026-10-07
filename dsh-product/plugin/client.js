@@ -515,7 +515,9 @@ window.__ModuleLoader__.load({
           return () => { disposed = true; abort.abort(); clearInterval(timer); document.removeEventListener("visibilitychange", visible); };
         }, [current?.id, sessionId]);
         useEffect(() => {
-          if (!current) return;
+          // A switch RPC can arrive before its native projection. FilesBody reads
+          // that projection when it seeds a tab, so reopen only after it catches up.
+          if (!current || binding?.current?.id !== current.id) return;
           const previous = previousTarget.current;
           if (previous && previous.sessionId === sessionId && previous.id !== current.id) {
             const sidebar = ctx.sidebarRight;
@@ -527,7 +529,7 @@ window.__ModuleLoader__.load({
             showNotice("已切换至 " + shortTarget(current) + "。下一条消息使用此工作区。");
           }
           previousTarget.current = { sessionId, id: current.id };
-        }, [current?.id, sessionId]);
+        }, [current?.id, binding?.current?.id, sessionId]);
         if (!current) return null;
         const mine = state?.control?.mine;
         const pending = effective.pending;

@@ -13,6 +13,7 @@
 | 输入权持久恢复与分支独立 | `verify_dsh_ownership.py`，独立原生 Host、本地 SSE 模型、两次停启 | 7 项通过 |
 | 客户端发送失败与返回结果 | `verify_dsh_client.mjs`，实际客户端拦截器、loopback HTTP 服务 | 4 项通过 |
 | 多窗口草稿与会话选择恢复 | `verify_dsh_drafts.mjs`，原生 Store 引擎、实际工厂与插件、模拟浏览器存储 | 13 项通过 |
+| 文件侧栏与工作区切换顺序 | `verify_dsh_files.mjs`，实际客户端组件、原生文件树与 Store、React 渲染器 | 7 项通过 |
 | 启动等待、取消与登录恢复 | `verify_dsh_launcher.py`，独立 Host、loopback SSH、真实 Linux 用户服务 | 16 项通过 |
 | 既有 Pi MCP 工具行为 | `verify_local.py`，独立 loopback sshd | 23 项通过 |
 | 既有远端工作区入口 | `verify_workspace_local.py`，两个并行目录与 HTTP MCP | 11 项通过 |
@@ -54,6 +55,7 @@ dsh web --remote --no-open
 .venv/bin/python verify_dsh_ownership.py --node /home/kingguuu8/.local/node/bin/node
 /home/kingguuu8/.local/node/bin/node verify_dsh_client.mjs
 node verify_dsh_drafts.mjs
+node verify_dsh_files.mjs
 .venv/bin/python verify_dsh_launcher.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
 ```
 
@@ -140,6 +142,18 @@ node verify_dsh_drafts.mjs
 客户端 HTTP 异常回归 4 项、重复应用补丁的幂等检查、依赖锁一致性、JavaScript 语法、Python lint 与格式检查通过。临时 Host、模型、SSH、代理端口、目录和浏览器页已清理。证据位于 `.local/verification-dsh-drafts-before.json`、`.local/verification-dsh-drafts-store.json` 和 `.local/verification-dsh-drafts-ui.json`。该轮验证 Linux 浏览器环境；macOS、Windows 真机与关闭窗口后的浏览器恢复行为仍待覆盖。
 
 新版已部署到 VPS4。部署前确认会话空闲且没有待切换目标，备份五份产品源码与包文件、三份生成后的原生 JavaScript，再应用补丁并重启 Host。运行源码及三份生成文件均与本地验证版本哈希一致，重复应用补丁保持幂等。35 个已有会话的五项投影及当前绑定、7 个工作区分组、机器目录与六份配置逐项保持；26 个原控制者恢复，随机查看者保持只读。云端、当前电脑与 VPS1 的实际原生文件浏览和工具探测通过。原产品页面只读刷新后保留会话标题、执行位置与查看权限，目标已连接，未引入草稿；生产验证没有发送消息或接管输入。部署证据位于 `.local/verification-dsh-window-deployed.json`，备份位于 VPS4 的 `dsh-state/backups/window-recovery-*`。回滚须按备份中的 `manifest.json` 同时恢复产品源码与生成后的原生文件，再重启 Host。
+
+## Web 文件侧栏同步
+
+2026 年 10 月 8 日，隔离的两窗口接力复现工作环境已切换到 B、文件树仍显示 A 的路径，列表却来自 B 的情况。切换接口可以先于原生会话投影返回，插件因此过早重开文件页签。文件树首次设定的根目录随后保持，后到的投影无法修正它。
+
+本轮让插件在原生会话投影确认当前执行目标后，再关闭旧工作区的预览并重开文件树。任务运行期间的待切换目标保持原目录，侧栏收起时保持收起。变化仅涉及客户端同步，云端绑定、输入权、工具与文件作用域保持。
+
+`verify_dsh_files.mjs` 使用实际注册的工作环境组件、DSH 原生 FilesBody、DirectoryNode、文件工厂与 Store 引擎，通过 React Test Renderer 控制接口结果和投影到达顺序，实际读取两个临时目录。7 项检查覆盖初始目录、接口先到、投影先到、待切换目标及其生效、旧预览关闭与收起侧栏。旧版客户端在相同检查中失败，修正版通过。新增 React Test Renderer 18.3.1 为开发验证依赖，运行依赖映射保持原值；安装 `dsh-product` 的开发依赖后执行 `node verify_dsh_files.mjs`。
+
+8 项真实浏览器检查使用独立 Host 与 loopback SSH：双向切换的根目录和列表正确，同名文件分别预览实际 A、B 的内容；查看窗口保持只读，切走会话期间另端切换后再返回也能关闭旧预览。侧栏在切换期间保持收起，明确重开后读取新目录。模型只收到两次准备历史的请求，文件验证没有提交模型消息。客户端 HTTP 异常 4 项、多窗口恢复 13 项、依赖锁一致性、JavaScript 语法、Python lint 与格式检查通过。临时 Host、模型、SSH、代理、目录与浏览器页已清理。证据位于 `.local/verification-dsh-files-before.json`、`.local/verification-dsh-files-component.json` 与 `.local/verification-dsh-files-ui.json`；该轮覆盖 Linux 浏览器环境，macOS 与 Windows 真机仍待验证。
+
+会话空闲且没有待切换目标时，仅替换 VPS4 的 `dsh-product/plugin/client.js` 并重启 Host；测试渲染器保留为本地开发依赖。运行客户端与验证源码哈希一致，35 个已有会话的五项投影与绑定、7 个工作区分组、机器目录和六份配置保持。26 个原控制者恢复，随机查看者只读；三台机器的原生文件浏览与实际工具探测通过。真实页面只读刷新后保留会话标题、执行位置和查看权限，目标已连接；生产检查没有提交消息或接管输入。证据位于 `.local/verification-dsh-files-deployed.json`，原客户端备份位于 VPS4 的 `dsh-state/backups/file-projection-*`；回滚时恢复其 `client.js` 并重启 Host。
 
 ## 设备安装
 
