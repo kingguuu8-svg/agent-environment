@@ -19,6 +19,7 @@ export const name = "remote-workspaces";
 export const inject = ["agents", "sessions", "sessionController", "sessionProjections", "tools", "systemPrompt", "workspaceFiles", "workspaceRegistry"];
 export const Config = z.object({ stateDir: z.string().required(), targets: z.string().required(), python: z.string().required(), cloudWorkspace: z.string().required() });
 const eventType = "remote/workspace";
+const handoffEventType = "remote/handoff";
 const bindingSchema = schema.object({ id: schema.string(), machine: schema.string(), workspace: schema.string(), hostname: schema.string().optional() });
 const projectionSchema = schema.object({ current: bindingSchema.nullable(), pending: bindingSchema.nullable(), revision: schema.number().int().nonnegative() });
 const invocationInitializers = [];
@@ -26,6 +27,8 @@ const execute = promisify(execFile);
 
 function fail(message) { throw new RemoteError("gateway/bad-request", message, {}); }
 function checkRequest(request) { if (!request || typeof request !== "object" || Array.isArray(request)) fail("Invalid request"); }
+function checkController(request) { if (typeof request.clientId !== "string" || !/^[a-zA-Z0-9-]{16,80}$/.test(request.clientId)) fail("Invalid controller identity"); }
+function newController(request) { return { clientId: request.clientId, label: String(request.label ?? "Web 窗口").slice(0, 80), epoch: randomUUID() }; }
 function errorMessage(error) { return error instanceof Error ? error.message : String(error); }
 
 export class RemoteWorkspaces extends TypertRemoteService {
@@ -48,18 +51,18 @@ export class RemoteWorkspaces extends TypertRemoteService {
     this.deviceChecks = new Map();
     ctx.effect(() => () => this.environment.close(), "remote: transports");
     ctx.sessionProjections.register({
-      key: "remoteBinding", stateVersion: 1, stateSchema: projectionSchema,
+      key: "remoteBinding", stateVersion: 2, stateSchema: projectionSchema,
       init: (header) => ({ current: this.anchors[header.cwd] ?? (header.cwd === this.environment.get("cloud").workspace ? this.binding("cloud") : null), pending: null, revision: 0 }),
-      apply: (state, event) => event.type === eventType ? event.data : state,
+      apply: (state, event) => event.type === eventType ? event.data : event.type === handoffEventType ? event.data.binding : state,
       wire: { viewSchema: projectionSchema, view: (state) => state },
     });
     const controlSchema = schema.object({ clientId: schema.string(), label: schema.string() }).nullable();
-    ctx.sessionProjections.register({ key: "remoteController", stateVersion: 2,
+    ctx.sessionProjections.register({ key: "remoteController", stateVersion: 3,
       stateSchema: schema.object({ inheritedEventCount: schema.number().int().nonnegative(), controller: controlSchema }),
       init: (_header, inheritedEventCount) => ({ inheritedEventCount, controller: null }),
       // A branch borrows history, including controller events. Only events in
       // its own log can establish that independent session's input owner.
-      apply: (state, event) => event.type === "remote/controller" && event.seq >= state.inheritedEventCount ? { ...state, controller: event.data } : state,
+      apply: (state, event) => event.seq < state.inheritedEventCount ? state : event.type === "remote/controller" ? { ...state, controller: event.data } : event.type === handoffEventType ? { ...state, controller: event.data.controller } : state,
       wire: { viewSchema: controlSchema, view: (state) => state.controller } });
     ctx.on("agent/created", async ({ agent }) => {
       const state = this.state(agent.session);
@@ -187,6 +190,13 @@ export class RemoteWorkspaces extends TypertRemoteService {
   requireControl(agent, request) {
     const lease = this.controllerLease(agent);
     if (!lease || lease.clientId !== request.clientId || lease.epoch !== request.epoch) fail("此会话已由另一窗口接管。请点击“接管输入”后继续。");
+  }
+  claimControl(agent, request) {
+    if (this.controllerLease(agent)?.clientId === request.clientId) return false;
+    const lease = newController(request);
+    agent.session.append("remote/controller", { clientId: lease.clientId, label: lease.label }, { ignorable: true });
+    this.leases.set(agent.id, lease);
+    return true;
   }
   commitSession(session, binding) {
     const state = this.state(session);
@@ -321,17 +331,12 @@ export class RemoteWorkspaces extends TypertRemoteService {
   }
   async control(request) {
     checkRequest(request);
-    if (typeof request.clientId !== "string" || !/^[a-zA-Z0-9-]{16,80}$/.test(request.clientId)) fail("Invalid controller identity");
+    checkController(request);
     const agent = await this.agent(request.sessionId);
     return this.serialize(agent.id, async () => {
       const current = this.controllerLease(agent);
       if (!current || current.clientId === request.clientId || request.takeover === true) {
-        if (!current || current.clientId !== request.clientId) {
-          const lease = { clientId: request.clientId, label: String(request.label ?? "Web 窗口").slice(0, 80), epoch: randomUUID() };
-          this.leases.set(agent.id, lease);
-          agent.session.append("remote/controller", { clientId: lease.clientId, label: lease.label }, { ignorable: true });
-          await this.checkpoint(agent);
-        }
+        if (this.claimControl(agent, request)) await this.checkpoint(agent);
       }
       return this.view(agent, request.clientId);
     });
@@ -339,7 +344,11 @@ export class RemoteWorkspaces extends TypertRemoteService {
   async switch(request, signal) {
     checkRequest(request);
     const agent = await this.agent(request.sessionId);
-    this.requireControl(agent, request);
+    const takeover = request.takeover === true;
+    if (takeover) checkController(request);
+    else this.requireControl(agent, request);
+    const observedController = this.controllerLease(agent);
+    if (this.state(agent.session).revision !== request.revision) fail("工作区已被更新，请刷新选择后再试。");
     this.reloadTargets();
     const id = await this.environment.register(request.machine, request.workspace);
     // SSH/bootstrap can be slow. Keep cancel/takeover responsive while it runs,
@@ -348,13 +357,27 @@ export class RemoteWorkspaces extends TypertRemoteService {
     signal.throwIfAborted();
     return this.serialize(agent.id, async () => {
       signal.throwIfAborted();
-      this.requireControl(agent, request);
+      if (takeover) {
+        if (this.controllerLease(agent)?.epoch !== observedController?.epoch) fail("输入权已被其他窗口更新，请检查当前会话后再试。");
+      } else this.requireControl(agent, request);
       const state = this.state(agent.session);
       if (state.revision !== request.revision) fail("工作区已被更新，请刷新选择后再试。");
       const binding = this.binding(id);
-      if (agent.status === "running") agent.session.append(eventType, { ...state, pending: binding, revision: state.revision + 1 }, { ignorable: true });
-      else await agent.runMaintenance(async () => { this.commit(agent, binding); await this.checkpoint(agent); });
-      await this.checkpoint(agent);
+      const running = agent.status === "running";
+      const commit = async () => {
+        // One event saves both halves of a handoff. Preparation failures and a
+        // partial log write cannot leave only the new controller persisted.
+        if (takeover) {
+          const lease = observedController?.clientId === request.clientId ? observedController : newController(request);
+          const nextBinding = running ? { ...state, pending: binding, revision: state.revision + 1 } : { current: binding, pending: null, revision: state.revision + 1 };
+          agent.session.append(handoffEventType, { controller: { clientId: lease.clientId, label: lease.label }, binding: nextBinding }, { ignorable: true });
+          this.leases.set(agent.id, lease);
+        } else if (running) agent.session.append(eventType, { ...state, pending: binding, revision: state.revision + 1 }, { ignorable: true });
+        else this.commit(agent, binding);
+        await this.checkpoint(agent);
+      };
+      if (running) await commit();
+      else await agent.runMaintenance(commit);
       return this.view(agent, request.clientId);
     });
   }

@@ -63,6 +63,8 @@ class FixtureModel(BaseHTTPRequestHandler):
 def verify(args, base, model_url):
     cloud, home, state = base / "cloud project", base / "home", base / "state"
     cloud.mkdir()
+    other = base / "other project"
+    other.mkdir()
     save(base / "targets.json", {"targets": {}})
     save(
         base / "models.json",
@@ -234,9 +236,43 @@ def verify(args, base, model_url):
                 "native forks inherit the workspace and history while acquiring independent input ownership"
             )
 
-            takeover = control(viewer, takeover=True)
+            takeover = api.remote(
+                "switch",
+                {
+                    "sessionId": session,
+                    "clientId": viewer,
+                    "label": "Viewer window",
+                    "takeover": True,
+                    "revision": get(owner)["revision"],
+                    "machine": "cloud",
+                    "workspace": str(other),
+                },
+            )
             assert takeover["control"]["mine"] and not get(owner)["control"]["mine"]
             rename(owner, initial_epoch, "MUST NOT RENAME", rejected=True)
+            api.remote(
+                "input",
+                {
+                    "clientId": viewer,
+                    "epoch": takeover["control"]["epoch"],
+                    "method": "prompt",
+                    "payload": {
+                        "sessionId": session,
+                        "requestId": str(uuid.uuid4()),
+                        "mode": "queue",
+                        "content": [{"type": "text", "text": "After handoff."}],
+                    },
+                },
+            )
+            wait_for(lambda: len(FixtureModel.requests) == 2, timeout=30)
+            wait_for(
+                lambda: get(viewer), lambda value: not value["running"], timeout=30
+            )
+            handoff_branch = api.rpc(
+                "session/fork", {"request": {"sessionId": session}}
+            )["sessionId"]
+            assert get(owner, handoff_branch)["control"] is None
+            assert get(owner, handoff_branch)["current"] == takeover["current"]
             before_restart = control(owner, takeover=True)
             passed(
                 "only an explicit takeover transfers input and the previous controller cannot mutate the session"
@@ -280,11 +316,24 @@ def verify(args, base, model_url):
             assert control(viewer, fork)["control"]["mine"]
             assert get(owner, untouched)["control"] is None
             assert control(viewer, untouched)["control"]["mine"]
+            assert get(owner, handoff_branch)["control"] is None
+            assert get(owner, handoff_branch)["current"] == takeover["current"]
             passed(
                 "restored branches preserve their own controllers and an unclaimed branch stays unowned across restart"
             )
 
-            taken = control(viewer, takeover=True)
+            taken = api.remote(
+                "switch",
+                {
+                    "sessionId": session,
+                    "clientId": viewer,
+                    "label": "Viewer window",
+                    "takeover": True,
+                    "revision": get(owner)["revision"],
+                    "machine": "cloud",
+                    "workspace": str(cloud),
+                },
+            )
             stop()
             api = start()
             assert control(owner)["control"]["mine"] is False
@@ -293,6 +342,7 @@ def verify(args, base, model_url):
                 current["control"]["mine"]
                 and current["control"]["epoch"] != taken["control"]["epoch"]
             )
+            assert current["current"] == taken["current"]
             assert (
                 next(
                     item

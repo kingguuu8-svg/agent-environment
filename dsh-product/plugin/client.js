@@ -257,7 +257,7 @@ window.__ModuleLoader__.load({
                 h("button", { type: "button", className: "rw-button rw-primary", disabled: busy || returning, onClick: download, "data-modal-autofocus": true }, busy ? "正在生成…" : expired ? "重新生成并下载" : installer ? "再次下载" : "下载安装器"))));
       }
 
-      function DirectoryDialog({ title, initial, busy: ownerBusy, onChoose, onCancel, actionLabel = "选择此目录", switching = false, canChoose = true, connection, onProbe }) {
+      function DirectoryDialog({ title, initial, busy: ownerBusy, onChoose, onCancel, actionLabel = "选择此目录", switching = false, canChoose = true, onHandoff, connection, onProbe }) {
         const [catalog, setCatalog] = useState(null);
         const [machine, setMachine] = useState(initial?.machine ?? originMachine);
         const [path, setPath] = useState(initial?.workspace ?? originWorkspace ?? "");
@@ -314,11 +314,13 @@ window.__ModuleLoader__.load({
         }, [connection?.status]);
         const changedPath = listing && path !== listing.absolutePath;
         const sameWorkspace = switching && machine === initial?.machine && listing?.absolutePath === initial?.workspace;
+        const takingOver = !canChoose && !!onHandoff;
+        const canCommit = canChoose || takingOver;
         const commit = async () => {
-          if (!listing || busy || loading || changedPath || !canChoose || sameWorkspace || committing.current) return;
+          if (!listing || busy || loading || changedPath || !canCommit || sameWorkspace || committing.current) return;
           committing.current = true;
           setSaving(true); setError("");
-          try { await onChoose({ machine, workspace: listing.absolutePath }); }
+          try { await (takingOver ? onHandoff : onChoose)({ machine, workspace: listing.absolutePath }); }
           catch (failure) { committing.current = false; setError(failure.message); setSaving(false); }
         };
         const cancel = () => { if (!busy) onCancel(); };
@@ -387,11 +389,11 @@ window.__ModuleLoader__.load({
             h("code", { className: "rw-full-path" }, listing.absolutePath)) : null,
           changedPath ? h("p", { className: "rw-meta", role: "status" }, "目录已修改，按 Enter 或“前往”载入后再选择。") : null,
           h("div", { className: "rw-footer" },
-            h("div", null, h("span", { className: "rw-meta" }, !canChoose ? "查看模式：接管输入后可切换工作区。" : switching ? "模型提示词和文件侧栏随工作区更新。" : listing?.truncated ? "目录较多，可输入完整路径前往。" : "记录在云端，文件留在所选机器。"),
+            h("div", null, h("span", { className: "rw-meta" }, takingOver ? "确认后，此窗口接管输入；原窗口继续查看。执行中的任务保留原工作区。" : !canChoose ? "查看模式：接管输入后可切换工作区。" : switching ? "模型提示词和文件侧栏随工作区更新。" : listing?.truncated ? "目录较多，可输入完整路径前往。" : "记录在云端，文件留在所选机器。"),
               h("button", { type: "button", className: "rw-button", style: { marginTop: "8px", display: "flex" }, disabled: busy, onClick: () => setSetupOpen(true) }, "接入新设备")),
             h("div", { className: "rw-footer-actions" },
               h("button", { type: "button", className: "rw-button", disabled: busy, onClick: cancel }, "取消"),
-              h("button", { type: "button", className: "rw-button rw-primary", disabled: busy || loading || !listing || changedPath || !canChoose || sameWorkspace, onClick: commit }, busy ? "正在准备工作区…" : sameWorkspace ? "当前工作区" : actionLabel)))
+              h("button", { type: "button", className: "rw-button rw-primary", disabled: busy || loading || !listing || changedPath || !canCommit || sameWorkspace, onClick: commit }, busy ? takingOver ? "正在接管并准备工作区…" : "正在准备工作区…" : sameWorkspace ? "当前工作区" : takingOver ? "接管并切换" : actionLabel)))
         );
       }
 
@@ -511,6 +513,13 @@ window.__ModuleLoader__.load({
         const cloudUnavailable = error instanceof CloudConnectionError;
         const availability = cloudUnavailable ? "cloud-offline" : probing === current.id ? "checking" : connection?.status ?? "unknown";
         const statusLabel = { online: "已连接", unavailable: "工作区不可用", checking: "检查中", unknown: "待检查", "cloud-offline": error?.loginExpired ? "登录已失效" : "云端断线" }[availability];
+        const selectWorkspace = async (chosen, takeover = false) => {
+          const request = { sessionId, revision: effective.revision, ...chosen };
+          const value = takeover ? await api("switch", { ...request, takeover: true, clientId, label }) : await controlled("switch", request);
+          setView(value); setChoosing(false);
+          if (value.pending) showNotice((takeover ? "已接管输入。" : "") + "已安排切换。当前任务继续在原工作区执行，结束后切换至 " + shortTarget(value.pending) + "。");
+          else if (takeover) showNotice("已接管输入并切换至 " + shortTarget(value.current) + "，可以继续同一条会话。");
+        };
         return h("div", { className: "rw-bar", "data-remote-machine": current.machine, "data-remote-workspace": current.workspace },
           h("button", { type: "button", className: "rw-button rw-target", "aria-label": "工作环境：" + shortTarget(current), title: current.workspace + "\n点击查看机器、目录和连接，或切换工作区。", onClick: () => setChoosing(true) },
             h("span", { className: "rw-dot", "data-status": availability }), h("span", { className: "rw-target-label" }, shortTarget(current)), h("span", { className: "rw-target-status" }, statusLabel), h("span", { "aria-hidden": true }, "⌄")),
@@ -524,11 +533,9 @@ window.__ModuleLoader__.load({
           } }, "撤回") : null) : null,
           ["unavailable", "cloud-offline"].includes(availability) && !error?.loginExpired ? h("button", { className: "rw-button", type: "button", onClick: () => { refreshNow.current(); probeNow.current(); } }, cloudUnavailable ? "重连云端" : "重新检查工作区") : null,
           error ? h("span", { role: "alert", className: "rw-error", title: error.cause?.message ?? error.message }, cloudUnavailable && !error.loginExpired ? "正在自动重连，未发送内容保留在当前浏览器。" : error.message) : null,
-          choosing ? h(DirectoryDialog, { title: "工作环境", initial: current, switching: true, canChoose: !!mine, actionLabel: "切换到此工作区", connection: { ...connection, status: availability, ...(error ? { error: error.message, loginExpired: !!error.loginExpired } : {}) }, onProbe: () => probeNow.current(), onCancel: () => setChoosing(false), onChoose: async (chosen) => {
-            const value = await controlled("switch", { sessionId, revision: effective.revision, ...chosen });
-            setView(value); setChoosing(false);
-            if (value.pending) showNotice("已安排切换。当前任务继续在原工作区执行，结束后切换至 " + shortTarget(value.pending) + "。");
-          } }) : null);
+          choosing ? h(DirectoryDialog, { title: "工作环境", initial: current, switching: true, canChoose: !!mine,
+            onHandoff: !cloudUnavailable && state?.control ? (chosen) => selectWorkspace(chosen, true) : undefined,
+            actionLabel: "切换到此工作区", connection: { ...connection, status: availability, ...(error ? { error: error.message, loginExpired: !!error.loginExpired } : {}) }, onProbe: () => probeNow.current(), onCancel: () => setChoosing(false), onChoose: selectWorkspace }) : null);
       }
 
       ctx.slots.inject("shell.overlay", () => ctx.slots.register({ name: "shell.overlay", id: "remote-new-session" }, NewSessionFlow));

@@ -1,13 +1,16 @@
 """Inspect actual model HTTP requests before and after native workspace switches."""
 
 import argparse
+import array
 import concurrent.futures
+import fcntl
 import json
 import os
 import signal
 import socket
 import subprocess
 import sys
+import termios
 import threading
 import time
 import uuid
@@ -30,6 +33,9 @@ def run(args):
         cloud_marker + "\nKeep {{cloud-template}} literal.\n"
     )
     requests = []
+    running_marker = "HANDOFF-RUNNING-" + run_id
+    release_turn = threading.Event()
+    held_turn_started = threading.Event()
 
     class Recorder(BaseHTTPRequestHandler):
         def log_message(self, *arguments):
@@ -38,6 +44,17 @@ def run(args):
         def do_POST(self):
             payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             requests.append(payload)
+            if (
+                any(
+                    message["role"] == "user"
+                    and running_marker in str(message["content"])
+                    for message in payload["messages"]
+                )
+                and not release_turn.is_set()
+            ):
+                held_turn_started.set()
+                if not release_turn.wait(timeout=30):
+                    raise RuntimeError("Held handoff turn was not released")
             chunks = [
                 {
                     "delta": {"role": "assistant", "content": "CONTEXT-WIRE-OK"},
@@ -278,7 +295,94 @@ def run(args):
                     "authoritative workspace reaches the actual model HTTP system prompt"
                 )
 
-                switch("laptop", remote)
+                original_client, original_epoch = client, epoch
+                viewer = str(uuid.uuid4())
+                readonly = api.remote(
+                    "control", {"sessionId": session, "clientId": viewer}
+                )
+                assert not readonly["control"]["mine"]
+                before_handoff = get()
+
+                def handoff(to_client, machine, workspace, revision=None, **options):
+                    return api.remote(
+                        "switch",
+                        {
+                            "sessionId": session,
+                            "clientId": to_client,
+                            "label": "Handoff window",
+                            "takeover": True,
+                            "revision": get()["revision"]
+                            if revision is None
+                            else revision,
+                            "machine": machine,
+                            "workspace": str(workspace),
+                        },
+                        **options,
+                    )
+
+                api.remote(
+                    "switch",
+                    {
+                        "sessionId": session,
+                        "clientId": viewer,
+                        "revision": before_handoff["revision"],
+                        "machine": "laptop",
+                        "workspace": str(remote),
+                    },
+                    rejected=True,
+                )
+                assert get()["current"] == before_handoff["current"]
+                assert get()["control"] == before_handoff["control"]
+                passed(
+                    "a viewer cannot switch a shared session without explicitly taking over"
+                )
+
+                for who, machine, workspace, revision in [
+                    ("invalid", "laptop", remote, before_handoff["revision"]),
+                    (viewer, "unknown", remote, before_handoff["revision"]),
+                    (
+                        viewer,
+                        "laptop",
+                        remote / "does-not-exist",
+                        before_handoff["revision"],
+                    ),
+                    (viewer, "laptop", remote, before_handoff["revision"] - 1),
+                ]:
+                    handoff(who, machine, workspace, revision, rejected=True)
+                    assert get()["current"] == before_handoff["current"]
+                    assert get()["control"] == before_handoff["control"]
+                passed(
+                    "invalid identities, targets, directories and stale selections cannot take over input or change the binding"
+                )
+
+                accepted_handoff = handoff(viewer, "laptop", remote)
+                assert accepted_handoff["control"]["mine"]
+                assert accepted_handoff["current"]["machine"] == "laptop"
+                assert accepted_handoff["pending"] is None
+                assert not get()["control"]["mine"]
+                api.remote(
+                    "input",
+                    {
+                        "clientId": original_client,
+                        "epoch": original_epoch,
+                        "method": "rename",
+                        "payload": {"sessionId": session, "title": "STALE OWNER"},
+                    },
+                    rejected=True,
+                )
+                client, epoch = viewer, accepted_handoff["control"]["epoch"]
+                handoff(
+                    viewer,
+                    "laptop",
+                    remote,
+                    before_handoff["revision"],
+                    rejected=True,
+                )
+                assert get()["control"] == accepted_handoff["control"]
+                assert get()["revision"] == accepted_handoff["revision"]
+                passed(
+                    "one explicit handoff selects the real SSH workspace, fences the old window and rejects repeated stale confirmation"
+                )
                 second = prompt()
                 assert "Machine: laptop" in second and f"Workspace: {remote}" in second
                 assert remote_marker in second and cloud_marker not in second
@@ -407,6 +511,78 @@ def run(args):
                     "new sessions use the chosen workspace and explicit custom names are preserved"
                 )
 
+                before_running = len(requests)
+                api.remote(
+                    "input",
+                    {
+                        "clientId": client,
+                        "epoch": epoch,
+                        "method": "prompt",
+                        "payload": {
+                            "sessionId": session,
+                            "requestId": str(uuid.uuid4()),
+                            "mode": "queue",
+                            "content": [{"type": "text", "text": running_marker}],
+                        },
+                    },
+                )
+                assert held_turn_started.wait(timeout=10)
+                assert get()["running"]
+                held_system = next(
+                    message["content"]
+                    for message in requests[-1]["messages"]
+                    if message["role"] in {"system", "developer"}
+                )
+                assert "Machine: cloud" in held_system
+                queued_handoff = handoff(original_client, "laptop", remote)
+                assert queued_handoff["control"]["mine"]
+                assert queued_handoff["current"]["machine"] == "cloud"
+                assert queued_handoff["pending"]["machine"] == "laptop"
+                assert queued_handoff["running"]
+                client, epoch = original_client, queued_handoff["control"]["epoch"]
+                queued_prompt = {
+                    "sessionId": session,
+                    "requestId": str(uuid.uuid4()),
+                    "mode": "queue",
+                    "content": [{"type": "text", "text": "CONTINUE-AFTER-HANDOFF"}],
+                }
+                for _ in range(2):
+                    api.remote(
+                        "input",
+                        {
+                            "clientId": client,
+                            "epoch": epoch,
+                            "method": "prompt",
+                            "payload": queued_prompt,
+                        },
+                    )
+                assert len(requests) == before_running + 1
+                passed(
+                    "handoff during a real active turn keeps its original machine while the new controller can queue the next prompt"
+                )
+                release_turn.set()
+                wait_for(lambda: len(requests) > before_running + 1, timeout=30)
+                wait_for(get, lambda value: not value["running"], timeout=30)
+                assert len(requests) == before_running + 2
+                assert get()["current"]["machine"] == "laptop"
+                assert get()["pending"] is None
+                final_system = next(
+                    message["content"]
+                    for message in requests[-1]["messages"]
+                    if message["role"] in {"system", "developer"}
+                )
+                assert "Machine: laptop" in final_system
+                assert (
+                    refreshed_marker in final_system
+                    and cloud_marker not in final_system
+                )
+                assert api.read(session, "AGENTS.md")["text"].startswith(
+                    refreshed_marker
+                )
+                passed(
+                    "the queued prompt runs once after handoff with the new machine, current project instructions and matching file browser"
+                )
+
                 def workers():
                     found = set()
                     for proc in Path("/proc").iterdir():
@@ -463,6 +639,61 @@ def run(args):
                 passed(
                     "a delayed real SSH probe times out within its bound, preserves other targets and recovers"
                 )
+
+                def queued_worker_input():
+                    # Observe the actual paused worker's pipe without consuming
+                    # it, proving preflight started before another window acts.
+                    descriptor = os.open(
+                        f"/proc/{paused_worker}/fd/0", os.O_RDONLY | os.O_NONBLOCK
+                    )
+                    try:
+                        count = array.array("i", [0])
+                        fcntl.ioctl(descriptor, termios.FIONREAD, count, True)
+                        return count[0]
+                    finally:
+                        os.close(descriptor)
+
+                before_race = get()
+                contender, newer_window = str(uuid.uuid4()), str(uuid.uuid4())
+                assert queued_worker_input() == 0
+                try:
+                    os.kill(paused_worker, signal.SIGSTOP)
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                        delayed_handoff = pool.submit(
+                            handoff,
+                            contender,
+                            "slow",
+                            remote,
+                            before_race["revision"],
+                            rejected=True,
+                        )
+                        wait_for(queued_worker_input, timeout=10)
+                        newer_control = api.remote(
+                            "control",
+                            {
+                                "sessionId": session,
+                                "clientId": newer_window,
+                                "takeover": True,
+                                "label": "Newer explicit takeover",
+                            },
+                        )
+                        assert newer_control["control"]["mine"]
+                        os.kill(paused_worker, signal.SIGCONT)
+                        failure = delayed_handoff.result(timeout=15)
+                        assert "输入权" in failure["message"]
+                finally:
+                    if paused_worker in workers():
+                        os.kill(paused_worker, signal.SIGCONT)
+                latest = api.remote(
+                    "get", {"sessionId": session, "clientId": newer_window}
+                )
+                assert latest["control"] == newer_control["control"]
+                assert latest["current"] == before_race["current"]
+                assert latest["revision"] == before_race["revision"]
+                assert latest["pending"] is None
+                passed(
+                    "a slow real SSH handoff cannot overwrite a newer explicit controller and leaves the execution target unchanged"
+                )
                 (ROOT / ".local/verification-dsh-context.json").write_text(
                     json.dumps(
                         {
@@ -475,6 +706,7 @@ def run(args):
                     + "\n"
                 )
     finally:
+        release_turn.set()
         if host:
             host.terminate()
             try:
