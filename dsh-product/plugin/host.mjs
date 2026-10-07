@@ -7,7 +7,8 @@ import { z as schema } from "zod";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { hostname } from "node:os";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import lockfile from "proper-lockfile";
 import { Environment, readJson, writeJson } from "../../environment.mjs";
@@ -16,7 +17,7 @@ export const name = "remote-workspaces";
 export const inject = ["agents", "sessions", "sessionController", "sessionProjections", "tools", "systemPrompt", "workspaceFiles", "workspaceRegistry"];
 export const Config = z.object({ stateDir: z.string().required(), targets: z.string().required(), python: z.string().required(), cloudWorkspace: z.string().required() });
 const eventType = "remote/workspace";
-const bindingSchema = schema.object({ id: schema.string(), machine: schema.string(), workspace: schema.string() });
+const bindingSchema = schema.object({ id: schema.string(), machine: schema.string(), workspace: schema.string(), hostname: schema.string().optional() });
 const projectionSchema = schema.object({ current: bindingSchema.nullable(), pending: bindingSchema.nullable(), revision: schema.number().int().nonnegative() });
 const invocationInitializers = [];
 
@@ -64,12 +65,9 @@ export class RemoteWorkspaces extends TypertRemoteService {
         if (state.pending) this.commitSession(session, state.pending);
       });
     });
-    ctx.on("agent/pre-step", async ({ agent, step, signal }, next) => {
-      const state = this.state(agent.session);
-      if (state.current && step === 1) await this.environment.refresh(state.current.id, signal);
-      return next();
-    });
-    ctx.systemPrompt.context({ name: "remote-workspace", order: 10, text: ({ agent }) => {
+    // The preset suppresses native runtime snapshots, whose local cwd describes
+    // the cloud host. Keep the authoritative target in the actual system prompt.
+    const workspacePrompt = ({ agent }) => {
       if (!agent) return "";
       const state = this.state(agent.session);
       if (!state.current) return "";
@@ -88,7 +86,16 @@ export class RemoteWorkspaces extends TypertRemoteService {
         context?.git ? `Current Git state:\n${JSON.stringify(context.git)}` : "",
         ...(context?.agents_files ?? []).map((file) => `Project instructions from ${current.machine}:${file.path}:\n${file.content}`),
       ].filter(Boolean).join("\n\n");
-    } });
+    };
+    ctx.systemPrompt.section({ name: "remote-workspace", order: 10, interpolate: false, text: workspacePrompt });
+    ctx.on("system-prompt/assemble", async (assembly, context, next) => {
+      const state = this.state(context.agent?.session);
+      if (state.current) await this.environment.refresh(state.current.id, context.signal);
+      const result = await next();
+      // DSH assembles before agent/pre-step. Replace this section after the
+      // async refresh so the very next request includes the latest facts.
+      return { ...result, sections: result.sections.map((section) => section.name === "remote-workspace" ? { ...section, text: workspacePrompt(context) } : section) };
+    });
     for (const descriptor of this.environment.manifest) {
       ctx.tools.register(createMcpToolDefinition(ctx, {
         ...descriptor, rawName: descriptor.name,
@@ -117,7 +124,23 @@ export class RemoteWorkspaces extends TypertRemoteService {
 
   binding(id) {
     const entry = this.environment.get(id);
-    return { id, machine: entry.machine, workspace: entry.workspace };
+    return { id, machine: entry.machine, workspace: entry.workspace, hostname: entry.context?.hostname ?? (entry.machine === "cloud" ? hostname() : entry.machine) };
+  }
+  workspaceTitle(binding) {
+    return `${this.binding(binding.id).hostname} · ${basename(binding.workspace) || "/"}`;
+  }
+  async updateWorkspaceTitle(workspace, binding) {
+    // Retitle generated names, including rows left by the former split flow.
+    // A user's explicit native rename remains their own choice.
+    if ([basename(workspace.path), `${binding.machine} · ${binding.workspace}`].includes(workspace.title)) {
+      await workspace.setTitle(this.workspaceTitle(binding));
+    }
+  }
+  async updateWorkspaceTitles() {
+    for (const workspace of this.host.workspaceRegistry.list()) {
+      const binding = this.anchors[workspace.path] ?? (workspace.path === this.environment.get("cloud").workspace ? this.binding("cloud") : null);
+      if (binding) await this.updateWorkspaceTitle(workspace, binding);
+    }
   }
   state(session) {
     return session ? this.host.sessionProjections.stateOf(session, "remoteBinding") : { current: null, pending: null, revision: 0 };
@@ -130,7 +153,10 @@ export class RemoteWorkspaces extends TypertRemoteService {
   }
   view(agent, clientId) {
     const lease = this.leases.get(agent.id);
-    return { ...this.state(agent.session), running: agent.status === "running", control: lease ? { mine: lease.clientId === clientId, label: lease.label, epoch: lease.clientId === clientId ? lease.epoch : null } : null };
+    const state = this.state(agent.session);
+    return { ...state, current: state.current ? { ...state.current, hostname: this.binding(state.current.id).hostname } : null,
+      pending: state.pending ? { ...state.pending, hostname: this.binding(state.pending.id).hostname } : null,
+      running: agent.status === "running", control: lease ? { mine: lease.clientId === clientId, label: lease.label, epoch: lease.clientId === clientId ? lease.epoch : null } : null };
   }
   requireControl(agent, request) {
     const lease = this.leases.get(agent.id);
@@ -168,11 +194,14 @@ export class RemoteWorkspaces extends TypertRemoteService {
     const id = await this.environment.register(request.machine, request.workspace);
     await this.preflight(id, signal);
     signal.throwIfAborted();
-    const cwd = join(this.stateDir, "workspaces", id, "workspace");
+    const cwd = id === "cloud" ? this.environment.get("cloud").workspace : join(this.stateDir, "workspaces", id, "workspace");
     mkdirSync(cwd, { recursive: true, mode: 0o700 });
-    this.anchors[cwd] = this.binding(id);
+    const binding = this.binding(id);
+    this.anchors[cwd] = binding;
     writeJson(this.anchorsFile, this.anchors);
-    return { cwd, binding: this.binding(id) };
+    const workspace = await this.host.workspaceRegistry.create(cwd, this.workspaceTitle(binding));
+    await this.updateWorkspaceTitle(workspace, binding);
+    return { cwd, binding, workspaceId: workspace.id, title: workspace.title };
   }
   async get(request) {
     checkRequest(request);
@@ -354,4 +383,5 @@ export async function apply(ctx, config) {
   ctx.effect(() => release, "remote: single host");
   const service = new RemoteWorkspaces(ctx, config);
   await ctx.workspaceRegistry.initializeDefault(async () => service.environment.get("cloud").workspace);
+  await service.updateWorkspaceTitles();
 }

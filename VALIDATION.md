@@ -9,14 +9,23 @@
 | 会话、排队切换、输入权、文件作用域 | `verify_dsh.py`，Agent 在 VPS4，目标 VPS1，真实模型 | 16 项通过 |
 | 取消、目标离线、进程丢失、Host 重启 | `verify_dsh_recovery.py`，VPS4 与当前电脑，真实模型与实际服务停启 | 7 项通过 |
 | 新 HTTP MCP 的发现与调用 | `verify_dsh_mcp.py`，独立 DSH Host、真实模型、临时 HTTP MCP 服务 | 2 项通过 |
+| 模型请求上下文与工作区创建 | `verify_dsh_context.py`，独立 Host、loopback SSH、实际 HTTP 录制端点 | 7 项通过 |
 | 既有 Pi MCP 工具行为 | `verify_local.py`，独立 loopback sshd | 23 项通过 |
 | 既有远端工作区入口 | `verify_workspace_local.py`，两个并行目录与 HTTP MCP | 11 项通过 |
+
+本次命名、创建与上下文修复重新运行了 7 项模型请求检查和 16 项 VPS4 真实模型检查。表中其他脚本保留此前产品实现的验证记录。实际 Web 检查确认工作区加号直接创建、添加新目录后立即打开可编辑会话，以及全局新建入口复用已有工作区；快速双击加号和目录确认各自只增加一个原生会话。旧的临时工作区名称已修正，页面最后恢复到用户原会话。
 
 会话验证检查执行中保持旧目标、撤回与重新安排切换、旧版本选择被拒绝，以及切换前已经排队的消息在新目标执行。重复提交同一请求编号后，目标文件只追加一行。非法目录保留旧绑定，原生文件预览拒绝工作区外路径。原生 fork 继承历史和绑定，输入权独立；接管后旧窗口的提交被拒绝，原生 prompt API 也无法绕过控制权。
 
 恢复验证实际停止本机反向 SSH 服务，检查文件读取、目录选择和工作区切换均被拒绝，云端仍能读取自己的文件。目标恢复后，原文件侧栏通过同一绑定重新工作。另一个检查只终止 DSH 自己的云端文件 worker，后续请求重新连接，无需先运行模型。
 
 HTTP MCP 验证使用随机工具名，提示词只描述需要的功能。模型通过 `environment` 首次发现实际工具契约，调用该工具后写入结果；服务端调用记录与工作区文件独立复核通过。显式调用额外服务后，会话的默认工作区保持原值。
+
+模型请求检查直接读取 DSH 提供商发出的 HTTP 消息，核对同一会话从云端切到 SSH 工作区、更新项目指令、再切回云端时的有效系统提示词。每次请求包含当前机器、目录与绑定版本；旧项目指令被替换，模板括号保留原文，历史仍然存在。工作区准备检查默认命名、并发重复选择、旧临时名称修正，以及在已有工作区新建会话并保留手动命名。录制端点返回固定流式响应，模型语义与工具副作用由真实模型检查覆盖。
+
+本次请求检查修复了先前未覆盖的缺陷：`includeRuntimeContext: false` 会过滤通过 `systemPrompt.context` 注册的工作区信息，且 `agent/pre-step` 刷新发生在提示词组装之后。插件现在使用独立的系统提示词段，并在组装阶段刷新目标事实。旧演示会话日志的抽检确认缺少该环境信息；工具路由原本独立生效，因此先前的工具副作用验证无法证明上下文已发送。
+
+部署后的真实模型会话日志包含 3 次系统消息，均包含当前执行环境；记录覆盖 VPS4 云端工作区与 VPS1。运行文件与本地源码的 SHA256 一致，云端 DSH、Pi 以及本机设备连接服务均保持运行。
 
 重启检查让远端命令先追加一次记录，再等待；保存待切换目标后重启 VPS4 Host。原生会话恢复到该目标，旧输入权失效，已追加记录仍为一行，命令后半段没有执行。插件事件携带 DSH 的 `ignorable` 外层字段，绑定与控制权操作使用原生 `sessions.flush` 作为持久化检查点。早期演示日志经过带原件备份的修复，已有跨机器对话恢复并保留完整内容。
 
@@ -33,6 +42,7 @@ dsh web --remote --no-open
 .venv/bin/python verify_dsh.py --url-file /home/kingguuu8/.cache/remote-dsh/a36ca3ce857334ca.json --origin http://127.0.0.1:3081
 .venv/bin/python verify_dsh_recovery.py --config .local/vps-check.json --url-file /home/kingguuu8/.cache/remote-dsh/a36ca3ce857334ca.json --workspace .local/dsh-user-demo
 .venv/bin/python verify_dsh_mcp.py --models .local/dsh-dev/models.json --model-env .local/dsh-dev/model.env
+.venv/bin/python verify_dsh_context.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
 ```
 
 恢复脚本会暂时停止设备连接和重启 Host，应在空闲时运行。私有启动信息与完整验证记录位于忽略目录中。该版本验证了个人 Linux 环境；其他操作系统、多人权限隔离、远端扩展与持久交互式终端尚未覆盖。安装和维护方式见 [云端 DSH](DSH_REMOTE.md)。

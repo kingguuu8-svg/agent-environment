@@ -4,7 +4,7 @@ window.__ModuleLoader__.load({
     const React = require("react");
     const h = React.createElement;
     const { useState, useEffect, useRef, useSyncExternalStore } = React;
-    const inject = ["connection", "sessions", "slots", "uiWorkspace", "layout", "sidebarRight"];
+    const inject = ["connection", "sessions", "workspaces", "slots", "uiWorkspace", "layout", "sidebarRight"];
 
     function apply(ctx) {
       const clientId = crypto.randomUUID();
@@ -17,15 +17,13 @@ window.__ModuleLoader__.load({
       const leases = new Map();
       const listeners = new Set();
       let createOpen = false;
-      const openCreate = () => { createOpen = true; for (const listener of listeners) listener(); };
-      const closeCreate = () => { createOpen = false; for (const listener of listeners) listener(); };
+      let creation = { busy: false, error: "", workspaceId: null };
+      let creatingSession = null;
+      const notifyCreation = () => { for (const listener of listeners) listener(); };
+      const openCreate = () => { if (creatingSession) return; createOpen = true; creation = { busy: false, error: "", workspaceId: null }; notifyCreation(); };
+      const closeCreate = () => { createOpen = false; notifyCreation(); };
       const api = async (method, request, signal) => {
         const result = await originalCall("/api", `remoteWorkspaces/${method}`, { args: { request } }, signal);
-        if (!result.ok) throw new Error(result.error.message);
-        return result.value;
-      };
-      const native = async (endpoint, request) => {
-        const result = await originalCall("/api", endpoint, { args: { request } });
         if (!result.ok) throw new Error(result.error.message);
         return result.value;
       };
@@ -33,6 +31,23 @@ window.__ModuleLoader__.load({
         const value = await api("control", { sessionId, clientId, label, takeover });
         leases.set(sessionId, value);
         return value;
+      };
+      const createInWorkspace = (workspaceId) => {
+        if (creatingSession) return creatingSession;
+        creation = { busy: true, error: "", workspaceId }; notifyCreation();
+        creatingSession = (async () => {
+          const sessionId = await ctx.sessions.create({ workspaceId });
+          await control(sessionId);
+          ctx.uiWorkspace.openSession(sessionId);
+          return sessionId;
+        })().catch((error) => {
+          creation = { busy: false, error: error.message, workspaceId };
+          throw error;
+        }).finally(() => {
+          creatingSession = null;
+          creation = { ...creation, busy: false }; notifyCreation();
+        });
+        return creatingSession;
       };
       const controlled = async (method, request, signal) => {
         const value = leases.get(request.sessionId) ?? await control(request.sessionId);
@@ -54,8 +69,12 @@ window.__ModuleLoader__.load({
       ctx.connection.rpc.call = wrappedCall;
       ctx.effect(() => () => { if (ctx.connection.rpc.call === wrappedCall) ctx.connection.rpc.call = originalCall; }, "remote: controlled input");
       const startSession = ctx.uiWorkspace.startSession;
-      ctx.uiWorkspace.startSession = openCreate;
-      ctx.effect(() => () => { if (ctx.uiWorkspace.startSession === openCreate) ctx.uiWorkspace.startSession = startSession; }, "remote: new session flow");
+      const startRemoteSession = (workspaceId) => {
+        if (workspaceId !== undefined) createInWorkspace(workspaceId).catch(() => {});
+        else openCreate();
+      };
+      ctx.uiWorkspace.startSession = startRemoteSession;
+      ctx.effect(() => () => { if (ctx.uiWorkspace.startSession === startRemoteSession) ctx.uiWorkspace.startSession = startSession; }, "remote: new session flow");
       const style = document.createElement("style");
       style.textContent = `
         .rw-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font:inherit;max-width:100%}
@@ -65,6 +84,7 @@ window.__ModuleLoader__.load({
         .rw-primary{background:#356be8;color:white;border-color:transparent}.rw-primary:hover{background:#2d5bcc}
         .rw-meta{font-size:12px;opacity:.7}.rw-pending{font-size:12px;color:#c68c21;max-width:350px}
         .rw-error{color:#d46161;white-space:pre-wrap;font-size:13px}
+        .rw-status{position:fixed;right:24px;bottom:24px;z-index:1100;background:var(--color-bg-primary,#202124);border:1px solid #80808050;border-radius:10px;padding:12px 16px;display:flex;align-items:center;gap:10px;max-width:480px;box-shadow:0 8px 24px #0003}
         .rw-backdrop{position:fixed;inset:0;background:#0007;z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px}
         .rw-dialog{background:var(--color-bg-primary,#202124);color:var(--color-text-primary,#eee);border:1px solid #80808050;border-radius:16px;width:620px;max-width:100%;box-shadow:0 24px 80px #0006;padding:24px;font-family:inherit}
         .rw-dialog h2{margin:0 0 8px;font-size:20px}.rw-description{font-size:13px;opacity:.7;margin:0 0 20px}
@@ -91,6 +111,7 @@ window.__ModuleLoader__.load({
         const [hidden, setHidden] = useState(false);
         const lifetime = useRef();
         const generation = useRef(0);
+        const committing = useRef(false);
         const busy = saving || ownerBusy;
         const scan = async (selectedMachine, directory) => {
           const ticket = ++generation.current;
@@ -106,6 +127,7 @@ window.__ModuleLoader__.load({
         useEffect(() => {
           const controller = new AbortController();
           api("catalog", {}, controller.signal).then((value) => {
+            if (controller.signal.aborted) return;
             setMachines(value.machines);
             const chosen = value.machines.find((item) => item.id === machine) ?? value.machines[0];
             setMachine(chosen.id);
@@ -119,10 +141,11 @@ window.__ModuleLoader__.load({
           return () => document.removeEventListener("keydown", close);
         }, [busy, onCancel]);
         const commit = async () => {
-          if (!listing || busy || loading) return;
+          if (!listing || busy || loading || committing.current) return;
+          committing.current = true;
           setSaving(true); setError("");
           try { await onChoose({ machine, workspace: listing.absolutePath }); }
-          catch (failure) { setError(failure.message); setSaving(false); }
+          catch (failure) { committing.current = false; setError(failure.message); setSaving(false); }
         };
         const parent = listing?.absolutePath.replace(/\/+$/, "").replace(/\/[^/]*$/, "") || "/";
         return h("div", { className: "rw-backdrop", onMouseDown: (event) => { if (event.target === event.currentTarget && !busy) onCancel(); } },
@@ -142,15 +165,17 @@ window.__ModuleLoader__.load({
 
       function NewSessionFlow() {
         const open = useSyncExternalStore((listener) => { listeners.add(listener); return () => listeners.delete(listener); }, () => createOpen);
-        if (!open) return null;
+        const status = useSyncExternalStore((listener) => { listeners.add(listener); return () => listeners.delete(listener); }, () => creation);
+        if (!open) return status.busy || status.error ? h("div", { className: "rw-status", role: status.error ? "alert" : "status" },
+          h("span", { className: status.error ? "rw-error" : "rw-meta" }, status.error ? `新建会话失败：${status.error}` : "正在新建会话…"),
+          status.error ? h("button", { className: "rw-button", onClick: () => createInWorkspace(status.workspaceId).catch(() => {}) }, "重试") : null,
+          status.error ? h("button", { className: "rw-button", onClick: () => { creation = { busy: false, error: "", workspaceId: null }; notifyCreation(); } }, "关闭") : null) : null;
         return h(DirectoryDialog, { title: "新建云端会话", onCancel: closeCreate, onChoose: async (chosen) => {
           const picked = await api("pick", chosen);
-          const group = await native("workspace/create", { path: picked.cwd });
-          await native("workspace/rename", { workspaceId: group.workspace.workspaceId, title: `${chosen.machine} · ${chosen.workspace}` });
-          const sessionId = await ctx.sessions.create({ workspaceId: group.workspace.workspaceId });
-          await control(sessionId);
-          ctx.layout.selectPanel(null);
-          ctx.uiWorkspace.openSession(sessionId);
+          // Use DSH's controller so its local workspace snapshot receives the
+          // authoritative row before session selection and startup recovery.
+          const group = await ctx.workspaces.create({ path: picked.cwd });
+          await createInWorkspace(group.workspaceId);
           closeCreate();
         } });
       }
@@ -197,16 +222,18 @@ window.__ModuleLoader__.load({
         }, [binding?.current?.id, sessionId]);
         const current = binding?.current ?? state?.current;
         if (!current) return null;
+        const shortTarget = (target) => `${target.hostname ?? target.machine} · ${target.workspace.split("/").filter(Boolean).at(-1) || "/"}`;
+        const shown = state?.current?.id === current.id ? { ...current, hostname: state.current.hostname ?? current.hostname } : current;
         const mine = state?.control?.mine;
         const pending = binding?.pending ?? state?.pending;
         return h("div", { className: "rw-bar", "data-remote-machine": current.machine, "data-remote-workspace": current.workspace },
-          h("span", { className: "rw-target", title: `${current.machine} · ${current.workspace}` }, `${current.machine} · ${current.workspace}`),
+          h("span", { className: "rw-target", title: `${shown.hostname ?? current.machine} · ${current.workspace}` }, shortTarget(shown)),
           h("button", { type: "button", className: "rw-button", disabled: !mine, onClick: () => setChoosing(true) }, "切换工作区"),
           h("button", { type: "button", className: "rw-button", onClick: async () => {
             try { setView(await control(sessionId, true)); setError(""); } catch (failure) { setError(failure.message); }
           } }, mine ? "正在控制" : "接管输入"),
           !mine && state?.control ? h("span", { className: "rw-meta" }, `查看模式 · ${state.control.label} 正在控制`) : null,
-          pending ? h("span", { className: "rw-pending" }, `当前任务结束后切换至 ${pending.machine} · ${pending.workspace}`, mine ? h("button", { type: "button", className: "rw-button", onClick: async () => {
+          pending ? h("span", { className: "rw-pending", title: `${pending.machine} · ${pending.workspace}` }, `当前任务结束后切换至 ${shortTarget(pending)}`, mine ? h("button", { type: "button", className: "rw-button", onClick: async () => {
             try { setView(await controlled("discardSwitch", { sessionId })); } catch (failure) { setError(failure.message); }
           } }, "撤回") : null) : null,
           error ? h("span", { role: "alert", className: "rw-error" }, error) : null,
