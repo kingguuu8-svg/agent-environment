@@ -12,6 +12,7 @@
 | 模型请求、环境选择、接力与连接状态 | `verify_dsh_context.py`，独立 Host、loopback SSH、实际 HTTP 录制端点 | 18 项通过 |
 | 输入权持久恢复与分支独立 | `verify_dsh_ownership.py`，独立原生 Host、本地 SSE 模型、两次停启 | 7 项通过 |
 | 客户端发送失败与返回结果 | `verify_dsh_client.mjs`，实际客户端拦截器、loopback HTTP 服务 | 4 项通过 |
+| 多窗口草稿与会话选择恢复 | `verify_dsh_drafts.mjs`，原生 Store 引擎、实际工厂与插件、模拟浏览器存储 | 13 项通过 |
 | 启动等待、取消与登录恢复 | `verify_dsh_launcher.py`，独立 Host、loopback SSH、真实 Linux 用户服务 | 16 项通过 |
 | 既有 Pi MCP 工具行为 | `verify_local.py`，独立 loopback sshd | 23 项通过 |
 | 既有远端工作区入口 | `verify_workspace_local.py`，两个并行目录与 HTTP MCP | 11 项通过 |
@@ -52,6 +53,7 @@ dsh web --remote --no-open
 .venv/bin/python verify_dsh_context.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
 .venv/bin/python verify_dsh_ownership.py --node /home/kingguuu8/.local/node/bin/node
 /home/kingguuu8/.local/node/bin/node verify_dsh_client.mjs
+node verify_dsh_drafts.mjs
 .venv/bin/python verify_dsh_launcher.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
 ```
 
@@ -124,6 +126,20 @@ dsh web --remote --no-open
 模拟模型共收到两次请求。隔离 Host、模型、SSH、代理端口、临时目录和浏览器页已清理，用户页面保持。证据位于 `.local/verification-dsh-entry-path-before.json`、`.local/verification-dsh-entry-path-ui.json` 与 `.local/verification-dsh-entry-path-model.json`。客户端 4 项 HTTP 异常回归、JavaScript 语法、Python lint 与格式检查通过。该轮在 Linux 浏览器与 SSH 环境中验证；macOS 和 Windows 原生入口仍待真机检查。
 
 会话空闲且没有待切换目标时，VPS4 备份并仅替换 `dsh-product/plugin/client.js`，重启 Host 后刷新本机入口。运行文件哈希与已验证源码一致；35 个会话的五项实际投影及当前绑定、7 个原生工作区分组、机器目录与六份配置文件保持原值。26 个已有控制者恢复，随机查看者仍只读；云端、当前电脑和 VPS1 的原生文件浏览与实际工具探测通过。原页面刷新后保留会话、执行位置与查看权限，当前目标已连接。部署证据位于 `.local/verification-dsh-entry-path-deployed.json`，原界面备份留在 VPS4 的 `dsh-state/backups/terminal-entry-*` 中；回滚时恢复同一备份的 `client.js` 并重启 Host。
+
+## Web 多窗口恢复
+
+2026 年 10 月 8 日，两个隔离窗口复现同一会话草稿被覆盖：A 留下未发送内容，B 接管后改写，A 刷新随即显示 B 的内容。进一步切换项目时，B 打开其他会话也会使 A 刷新跳到该会话。两种行为均来自浏览器中共享的保存位置。
+
+本轮保留窗口自己的草稿和会话选择，用于刷新恢复。新窗口继续恢复浏览器最近的会话与草稿；当前控制窗口更新供新窗口恢复的草稿，查看者切换视图或迟到的发送失败恢复保留其窗口内容。文字草稿通过有版本检查的原生 Conversation 工厂接入，会话选择通过当前插件订阅原生导航 Store。云端记录、控制权和工作区协议保持。
+
+13 项自动检查执行实际补丁后的 Conversation 工厂与原生 Store 引擎，并加载实际客户端插件。结果覆盖旧草稿恢复、查看者视图变化、接管后独立恢复、发送与空草稿、丢失输入权后的迟到恢复、不同项目、存储失败与损坏、普通 DSH 的原生保存，以及窗口会话选择、无效缓存与新窗口默认恢复。测试依赖固定为上游使用的 Zustand 4.4.7 与 Immer 10.1.1，仅用于开发验证。安装 `dsh-product` 的开发依赖并运行补丁后，可执行 `node verify_dsh_drafts.mjs`。
+
+11 项实际浏览器与集成检查使用独立原生 Host、loopback SSH 与本地 SSE 模型，确认 A 与 B 的独立草稿、查看者切换轨迹后新窗口仍恢复 B 草稿、B 发送后自己的刷新为空而 A 内容保留、不同项目切回与刷新、各自会话选择和维护重启后的输入权限。新查看窗口保持只读，新建面板仍使用终端目录。模型共收到三次请求，其中两次为初始验证历史，之后只收到明确发送的 B 内容；A 与另一项目的未发送内容均未提交。重启前后的两份原生会话投影与绑定相同。
+
+客户端 HTTP 异常回归 4 项、重复应用补丁的幂等检查、依赖锁一致性、JavaScript 语法、Python lint 与格式检查通过。临时 Host、模型、SSH、代理端口、目录和浏览器页已清理。证据位于 `.local/verification-dsh-drafts-before.json`、`.local/verification-dsh-drafts-store.json` 和 `.local/verification-dsh-drafts-ui.json`。该轮验证 Linux 浏览器环境；macOS、Windows 真机与关闭窗口后的浏览器恢复行为仍待覆盖。
+
+新版已部署到 VPS4。部署前确认会话空闲且没有待切换目标，备份五份产品源码与包文件、三份生成后的原生 JavaScript，再应用补丁并重启 Host。运行源码及三份生成文件均与本地验证版本哈希一致，重复应用补丁保持幂等。35 个已有会话的五项投影及当前绑定、7 个工作区分组、机器目录与六份配置逐项保持；26 个原控制者恢复，随机查看者保持只读。云端、当前电脑与 VPS1 的实际原生文件浏览和工具探测通过。原产品页面只读刷新后保留会话标题、执行位置与查看权限，目标已连接，未引入草稿；生产验证没有发送消息或接管输入。部署证据位于 `.local/verification-dsh-window-deployed.json`，备份位于 VPS4 的 `dsh-state/backups/window-recovery-*`。回滚须按备份中的 `manifest.json` 同时恢复产品源码与生成后的原生文件，再重启 Host。
 
 ## 设备安装
 

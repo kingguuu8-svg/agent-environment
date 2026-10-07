@@ -33,6 +33,17 @@ window.__ModuleLoader__.load({
         } catch { return crypto.randomUUID(); }
       })();
       document.documentElement.dataset.remoteDshClient = clientId;
+      // Native DSH remembers the last conversation across the browser. Keep this
+      // tab's selection as well, so another project's window cannot redirect a reload.
+      const selection = ctx.uiWorkspace.selection;
+      const selectionKey = "remote-dsh-window-selection";
+      try {
+        const saved = JSON.parse(sessionStorage.getItem(selectionKey));
+        if (saved && typeof saved === "object" && !Array.isArray(saved) && (saved.sessionId === undefined || typeof saved.sessionId === "string")) selection.set(saved);
+      } catch {}
+      const saveSelection = () => { try { sessionStorage.setItem(selectionKey, JSON.stringify(selection.getSnapshot())); } catch {} };
+      saveSelection();
+      ctx.effect(() => selection.subscribe(saveSelection), "remote: window conversation recovery");
       const entry = new URLSearchParams(location.hash.slice(1) || location.search.slice(1));
       const originMachine = entry.get("machine") ?? "cloud";
       const originWorkspace = entry.get("workspace");

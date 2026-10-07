@@ -55,7 +55,7 @@ const ctx = {
     return (await response.json()).result;
   } } },
   effect(register) { cleanup.push(register()); },
-  slots: { inject() {} }, uiWorkspace: { startSession() {} },
+  slots: { inject() {} }, uiWorkspace: { startSession() {}, selection: { getSnapshot() { return {}; }, set() {}, subscribe() { return () => {}; } } },
 };
 plugin.apply(ctx);
 const prompt = (signal) => ctx.connection.rpc.call("/api", "session/prompt", {
