@@ -29,6 +29,7 @@ window.__ModuleLoader__.load({
       const leases = new Map();
       const listeners = new Set();
       let createOpen = false;
+      let deviceSetupOpen = false;
       let creation = { busy: false, error: "", workspaceId: null };
       let creatingSession = null;
       let notice = null;
@@ -41,6 +42,8 @@ window.__ModuleLoader__.load({
       ctx.effect(() => () => clearTimeout(noticeTimer), "remote: notice lifetime");
       const openCreate = () => { if (creatingSession) return; createOpen = true; creation = { busy: false, error: "", workspaceId: null }; notifyCreation(); };
       const closeCreate = () => { createOpen = false; notifyCreation(); };
+      const openDeviceSetup = () => { deviceSetupOpen = true; notifyCreation(); };
+      const closeDeviceSetup = () => { deviceSetupOpen = false; notifyCreation(); };
       const api = async (method, request, signal) => {
         const result = await originalCall("/api", `remoteWorkspaces/${method}`, { args: { request } }, signal);
         if (!result.ok) throw new Error(result.error.message);
@@ -123,7 +126,7 @@ window.__ModuleLoader__.load({
       document.head.append(style);
       ctx.effect(() => () => style.remove(), "remote: styles");
 
-      const shortTarget = (target) => `${target.hostname ?? target.machine} · ${target.workspace.split("/").filter(Boolean).at(-1) || "/"}`;
+      const shortTarget = (target) => `${target.hostname ?? target.machine} · ${target.workspace.split(/[\\/]/).filter(Boolean).at(-1) || "/"}`;
       const icon = (name) => h("svg", { className: "rw-icon", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true }, h("path", { d: {
         folder: "M3 7V5a1 1 0 0 1 1-1h5l2 3h9a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7Z",
         machine: "M3 4h18v12H3ZM8 21h8M12 16v5",
@@ -135,6 +138,54 @@ window.__ModuleLoader__.load({
         try { await navigator.clipboard.writeText(path); showNotice("工作区路径已复制"); }
         catch { showNotice("复制失败，可以选中完整路径手动复制。", "error"); }
       };
+
+      function DeviceSetupDialog() {
+        const [targetOs, setTargetOs] = useState(/Win/i.test(navigator.platform) ? "windows" : /Mac/i.test(navigator.platform) ? "mac" : "linux");
+        const [installer, setInstaller] = useState(null);
+        const [busy, setBusy] = useState(false);
+        const [error, setError] = useState("");
+        const [now, setNow] = useState(Date.now());
+        const waiting = useRef(false);
+        const lifetime = useRef();
+        useEffect(() => {
+          const abort = new AbortController(); lifetime.current = abort;
+          const timer = setInterval(() => setNow(Date.now()), 10000);
+          return () => { abort.abort(); clearInterval(timer); };
+        }, []);
+        const download = async () => {
+          if (waiting.current) return;
+          waiting.current = true; setBusy(true); setError("");
+          try {
+            const value = installer && installer.expiresAt > Date.now() ? installer : await api("deviceInstaller", { platform: targetOs }, lifetime.current.signal);
+            if (lifetime.current.signal.aborted) return;
+            setInstaller(value); setNow(Date.now());
+            const data = value.encoding === "base64" ? Uint8Array.from(atob(value.content), (char) => char.charCodeAt(0)) : value.content;
+            const url = URL.createObjectURL(new Blob([data], { type: value.encoding === "base64" ? "application/zip" : "text/x-shellscript;charset=utf-8" }));
+            const link = document.createElement("a"); link.href = url; link.download = value.filename; link.hidden = true;
+            document.body.append(link); link.click(); link.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 10000);
+          } catch (failure) { if (!lifetime.current.signal.aborted) setError(failure.message); }
+          finally { waiting.current = false; if (!lifetime.current.signal.aborted) setBusy(false); }
+        };
+        const remaining = installer ? Math.max(0, Math.ceil((installer.expiresAt - now) / 60000)) : null;
+        return h(Modal, { open: true, headless: true, title: "接入新设备", onClose: closeDeviceSetup, className: "rw-dialog" },
+          h("div", { className: "rw-dialog-heading" }, h("h2", null, "接入新设备"), h("button", { type: "button", className: "rw-button", "aria-label": "关闭", onClick: closeDeviceSetup }, "×")),
+          h("p", { className: "rw-description" }, "选择新机器的操作系统，下载安装器，共享云端会话并提供本机工具。"),
+          h("div", { className: "rw-dialog-body" },
+            h("div", { className: "rw-machines", role: "group", "aria-label": "目标操作系统" }, ...[{ id: "linux", label: "Linux", hint: "systemd 用户服务" }, { id: "mac", label: "macOS", hint: "Intel / Apple Silicon · 预览" }, { id: "windows", label: "Windows", hint: "Windows 10 / 11 · 预览" }].map((item) => h("button", { key: item.id, type: "button", className: "rw-machine", "aria-pressed": targetOs === item.id, disabled: busy, onClick: () => { setTargetOs(item.id); setInstaller(null); setError(""); } }, h("span", { className: "rw-machine-heading" }, item.label), h("span", { className: "rw-machine-host" }, item.hint)))),
+            h("ol", { className: "rw-setup-steps", style: { paddingLeft: "22px", fontSize: "14px", lineHeight: 1.9 } },
+              h("li", null, "下载专属安装器，放到准备接入的新机器。"),
+              targetOs === "windows" ? h("li", null, "解压 ZIP，双击其中的 ", h("code", null, "dsh-connect.cmd"), "。") : h("li", null, "在文件所在目录打开终端，执行：", h("pre", { style: { padding: "12px", background: "var(--dsw-alias-interactive-bg-hover,#80808012)", borderRadius: "8px", overflowWrap: "anywhere", whiteSpace: "pre-wrap" } }, targetOs === "mac" ? "bash dsh-connect-mac.command" : "bash dsh-connect-linux.sh")),
+              h("li", null, "安装器会自动配对、准备依赖、建立后台连接并打开页面。以后在项目目录运行 ", h("code", null, "dsh web --remote"), "。")),
+            h("p", { className: "rw-meta" }, targetOs === "linux" ? "需要 systemd 用户服务；缺少系统依赖时会请求 sudo。运行时安装在用户目录。" : targetOs === "mac" ? "后台连接使用 launchd；缺少 Python 时会请求管理员密码安装官方运行时。" : "后台连接随用户登录启动。自动安装 Python、Node.js 和 Git Bash；缺少 OpenSSH 客户端时需以管理员运行一次。"),
+            targetOs !== "linux" ? h("p", { className: "rw-meta" }, `${targetOs === "mac" ? "macOS" : "Windows"} 安装包为预览版，尚未完成对应系统的真机安装验证。`) : null,
+            h("p", { className: "rw-meta" }, "安装器仅用于一台自己的设备，有效期 15 分钟。文件包含临时配对凭据，请保留在自己的设备上。安装失败可以重跑，重复安装沿用原设备。"),
+            installer ? h("p", { role: "status", className: "rw-meta" }, remaining ? `安装器已生成，约 ${remaining} 分钟内有效。运行完成后，新设备会出现在工作环境中。` : "安装器已过期，请重新生成并下载。") : null,
+            error ? h("p", { role: "alert", className: "rw-error" }, error) : null),
+          h("div", { className: "rw-footer" }, h("span", { className: "rw-meta" }, "Agent、模型配置和记录继续保存在 VPS4。"),
+            h("div", { className: "rw-footer-actions" }, h("button", { type: "button", className: "rw-button", onClick: closeDeviceSetup }, "完成"),
+              h("button", { type: "button", className: "rw-button rw-primary", disabled: busy, onClick: download, "data-modal-autofocus": true }, busy ? "正在生成…" : remaining === 0 ? "重新生成并下载" : installer ? "再次下载" : "下载安装器"))));
+      }
 
       function DirectoryDialog({ title, initial, busy: ownerBusy, onChoose, onCancel, actionLabel = "选择此目录", switching = false, canChoose = true, connection, onProbe }) {
         const [catalog, setCatalog] = useState(null);
@@ -192,7 +243,7 @@ window.__ModuleLoader__.load({
           catch (failure) { committing.current = false; setError(failure.message); setSaving(false); }
         };
         const cancel = () => { if (!busy) onCancel(); };
-        const parent = listing?.absolutePath.replace(/\/+$/, "").replace(/\/[^/]*$/, "") || "/";
+        const parent = (listing?.absolutePath.replaceAll("\\", "/").replace(/\/+$/, "").replace(/\/[^/]*$/, "") || "/").replace(/^([A-Za-z]:)$/, "$1/");
         const saved = new Map((catalog?.savedWorkspaces ?? []).filter((item) => item.machine === machine).map((item) => [item.workspace, item]));
         if (initial?.machine === machine && !saved.has(initial.workspace)) saved.set(initial.workspace, initial);
         const directories = (listing?.entries ?? []).filter((item) => item.type === "directory" && (hidden || !item.name.startsWith(".")));
@@ -245,7 +296,8 @@ window.__ModuleLoader__.load({
             h("code", { className: "rw-full-path" }, listing.absolutePath)) : null,
           changedPath ? h("p", { className: "rw-meta", role: "status" }, "目录已修改，按 Enter 或“前往”载入后再选择。") : null,
           h("div", { className: "rw-footer" },
-            h("span", { className: "rw-meta" }, !canChoose ? "查看模式：接管输入后可切换工作区。" : switching ? "模型提示词和文件侧栏随工作区更新。" : listing?.truncated ? "目录较多，可输入完整路径前往。" : "记录在云端，文件留在所选机器。"),
+            h("div", null, h("span", { className: "rw-meta" }, !canChoose ? "查看模式：接管输入后可切换工作区。" : switching ? "模型提示词和文件侧栏随工作区更新。" : listing?.truncated ? "目录较多，可输入完整路径前往。" : "记录在云端，文件留在所选机器。"),
+              h("button", { type: "button", className: "rw-button", style: { marginTop: "8px", display: "flex" }, disabled: busy, onClick: () => { onCancel(); openDeviceSetup(); } }, "接入新设备")),
             h("div", { className: "rw-footer-actions" },
               h("button", { type: "button", className: "rw-button", disabled: busy, onClick: cancel }, "取消"),
               h("button", { type: "button", className: "rw-button rw-primary", disabled: busy || loading || !listing || changedPath || !canChoose || sameWorkspace, onClick: commit }, busy ? "正在准备工作区…" : sameWorkspace ? "当前工作区" : actionLabel)))
@@ -254,6 +306,7 @@ window.__ModuleLoader__.load({
 
       function NewSessionFlow() {
         const open = useSyncExternalStore((listener) => { listeners.add(listener); return () => listeners.delete(listener); }, () => createOpen);
+        const setupOpen = useSyncExternalStore((listener) => { listeners.add(listener); return () => listeners.delete(listener); }, () => deviceSetupOpen);
         const status = useSyncExternalStore((listener) => { listeners.add(listener); return () => listeners.delete(listener); }, () => creation);
         const message = useSyncExternalStore((listener) => { listeners.add(listener); return () => listeners.delete(listener); }, () => notice);
         const toast = message ? h("div", { className: "rw-status", role: message.kind === "error" ? "alert" : "status" }, message.message) : null;
@@ -261,6 +314,7 @@ window.__ModuleLoader__.load({
           h("span", { className: status.error ? "rw-error" : "rw-meta" }, status.error ? `新建会话失败：${status.error}` : "正在新建会话…"),
           status.error ? h("button", { className: "rw-button", onClick: () => createInWorkspace(status.workspaceId).catch(() => {}) }, "重试") : null,
           status.error ? h("button", { className: "rw-button", onClick: () => { creation = { busy: false, error: "", workspaceId: null }; notifyCreation(); } }, "关闭") : null) : null;
+        if (setupOpen) return h(React.Fragment, null, toast, h(DeviceSetupDialog));
         if (!open) return progress ?? toast;
         return h(React.Fragment, null, toast, h(DirectoryDialog, { title: "新建会话", actionLabel: "在此新建会话", onCancel: closeCreate, onChoose: async (chosen) => {
           const picked = await api("pick", chosen);

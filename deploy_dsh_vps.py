@@ -5,6 +5,7 @@ import json
 import shlex
 from pathlib import Path
 
+from build_device_installer import bundle, platform_configuration
 from deploy_cloud_vps import AUTHORIZE, known_host, python_run
 from gateway import BUNDLE_FILES, load_targets
 from verify_workspace_vps import model_config
@@ -16,6 +17,10 @@ FILES = [
     "bootstrap.py",
     "workspace_gateway.py",
     "environment.mjs",
+    "state-json.mjs",
+    "device_onboarding.py",
+    "installer_templates.py",
+    "bridge_client.py",
     "remote-agent.mjs",
     "dsh.mjs",
     "dsh-host.mjs",
@@ -73,6 +78,8 @@ def run(args):
     cloud, target = targets["gateway"], targets["target"]
     models, key = model_config(args.model)
     files = {name: (ROOT / name).read_text() for name in FILES}
+    files["device-installer.bundle.json"] = json.dumps(bundle(ROOT))
+    files["device-platform.json"] = json.dumps(platform_configuration(cloud))
     for path in (ROOT / "dsh-product").rglob("*"):
         if path.is_file() and "node_modules" not in path.parts:
             files[str(path.relative_to(ROOT))] = path.read_text()

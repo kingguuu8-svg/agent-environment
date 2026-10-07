@@ -17,6 +17,7 @@ RUNTIME_FILES = (
     "workspace_gateway.py",
     "remote-agent.mjs",
     "environment.mjs",
+    "state-json.mjs",
     "cloud-agent.mjs",
     "cloud-service.mjs",
     "cloud-bridge.mjs",

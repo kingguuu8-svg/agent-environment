@@ -2,21 +2,12 @@
 import { createEditToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { createHash, randomUUID } from "node:crypto";
-import { readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { realpathSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { openWorkspace, toolNames } from "./remote-agent.mjs";
-
-export function readJson(path, fallback) {
-  try { return JSON.parse(readFileSync(path, "utf8")); }
-  catch (error) { if (error.code === "ENOENT") return fallback; throw error; }
-}
-
-export function writeJson(path, value) {
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  writeFileSync(temporary, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
-  renameSync(temporary, path);
-}
+import { readJson, writeJson } from "./state-json.mjs";
+export { readJson, writeJson } from "./state-json.mjs";
 
 export class Environment {
   constructor({ stateDir, config, python, cloudWorkspace }) {

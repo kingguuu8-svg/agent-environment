@@ -6,9 +6,11 @@ import { Session } from "@deepseek-ai/dsh-session";
 import { z as schema } from "zod";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { hostname } from "node:os";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
+import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import lockfile from "proper-lockfile";
 import { Environment, readJson, writeJson } from "../../environment.mjs";
@@ -20,6 +22,7 @@ const eventType = "remote/workspace";
 const bindingSchema = schema.object({ id: schema.string(), machine: schema.string(), workspace: schema.string(), hostname: schema.string().optional() });
 const projectionSchema = schema.object({ current: bindingSchema.nullable(), pending: bindingSchema.nullable(), revision: schema.number().int().nonnegative() });
 const invocationInitializers = [];
+const execute = promisify(execFile);
 
 function fail(message) { throw new RemoteError("gateway/bad-request", message, {}); }
 function checkRequest(request) { if (!request || typeof request !== "object" || Array.isArray(request)) fail("Invalid request"); }
@@ -31,6 +34,8 @@ export class RemoteWorkspaces extends TypertRemoteService {
     for (const initializer of invocationInitializers) initializer.call(this);
     this.host = ctx;
     this.stateDir = resolve(config.stateDir);
+    this.runtimeDir = dirname(resolve(config.targets));
+    this.python = config.python;
     mkdirSync(this.stateDir, { recursive: true, mode: 0o700 });
     this.anchorsFile = join(this.stateDir, "anchors.json");
     this.anchors = readJson(this.anchorsFile, {});
@@ -129,7 +134,7 @@ export class RemoteWorkspaces extends TypertRemoteService {
     return { id, machine: entry.machine, workspace: entry.workspace, hostname: entry.context?.hostname ?? (entry.machine === "cloud" ? hostname() : entry.machine) };
   }
   workspaceTitle(binding) {
-    return `${this.binding(binding.id).hostname} · ${basename(binding.workspace) || "/"}`;
+    return `${this.binding(binding.id).hostname} · ${basename(binding.workspace.replaceAll("\\", "/")) || "/"}`;
   }
   async updateWorkspaceTitle(workspace, binding) {
     // Retitle generated names, including rows left by the former split flow.
@@ -193,6 +198,12 @@ export class RemoteWorkspaces extends TypertRemoteService {
     const services = Object.keys(this.environment.configuration.mcp ?? {}).map((id) => ({ id, tools: this.environment.descriptors(id).map((tool) => tool.name) }));
     return { machines, savedWorkspaces, services, tools: this.environment.manifest.map((tool) => tool.name), workspaces: this.environment.list() };
   }
+  async deviceInstaller(request, signal) {
+    checkRequest(request);
+    if (!["linux", "mac", "windows"].includes(request.platform ?? "linux")) fail("请选择 Linux、macOS 或 Windows");
+    const { stdout } = await execute(this.python, [join(this.runtimeDir, "device_onboarding.py"), "create", "--runtime", this.runtimeDir, "--state", this.stateDir, "--platform", request.platform ?? "linux"], { signal, timeout: 15000, maxBuffer: 16 * 1024 * 1024 });
+    return JSON.parse(stdout);
+  }
   connectionState(id) {
     const checked = this.connectionChecks.get(id);
     if (this.checkingConnections.has(id)) return { ...checked, status: "checking" };
@@ -234,7 +245,10 @@ export class RemoteWorkspaces extends TypertRemoteService {
   async browse(request, signal) {
     checkRequest(request);
     this.reloadTargets();
-    const id = await this.environment.register(request.machine, "/");
+    const target = this.environment.configuration.targets?.[request.machine];
+    const root = target?.platform === "windows" ? win32.parse(request.path || target.workspace).root : "/";
+    if (!root) fail("请输入完整目录路径，例如 C:\\Users");
+    const id = await this.environment.register(request.machine, root);
     return this.fileRequest(id, { op: "list", ...(request.path ? { path: request.path } : {}) }, signal);
   }
   async pick(request, signal) {
@@ -421,7 +435,7 @@ export class RemoteWorkspaces extends TypertRemoteService {
 }
 
 // Native JS decorators keep this plugin on DSH's authenticated Typert RPC carrier.
-for (const method of ["catalog", "browse", "pick", "get", "probe", "control", "switch", "discardSwitch", "input"]) {
+for (const method of ["catalog", "deviceInstaller", "browse", "pick", "get", "probe", "control", "switch", "discardSwitch", "input"]) {
   Remote(RemoteWorkspaces.prototype[method], { kind: "method", name: method, private: false, static: false, addInitializer: (initializer) => invocationInitializers.push(initializer) });
 }
 

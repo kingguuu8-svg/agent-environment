@@ -122,8 +122,8 @@ class WorkspaceGateway(Gateway):
                 "port": target["port"],
                 "workspace": backend.info["workspace"],
                 "uri": (
-                    f"ssh://{quote(target['host'], safe='@[]:')}:{target['port']}"
-                    f"{quote(backend.info['workspace'], safe='/')}"
+                    f"{'device' if target.get('kind') == 'bridge' else 'ssh'}://{quote(target['host'], safe='@[]:')}:{target['port']}"
+                    f"/{quote(backend.info['workspace'].lstrip('/'), safe='/')}"
                 ),
             }
             if self.binding is not None and self.binding != binding:

@@ -1,6 +1,5 @@
 """Executed over SSH: prepare an isolated tool bundle and print its launch info."""
 
-import fcntl
 import hashlib
 import json
 import os
@@ -25,7 +24,12 @@ def install(request: dict) -> dict:
         workspace.mkdir(parents=True, exist_ok=True)
     base.mkdir(mode=0o700, parents=True, exist_ok=True)
     node = shutil.which(os.path.expanduser(request["node"]))
-    npm = shutil.which(os.path.expanduser(request["npm"]))
+    npm_value = os.path.expanduser(request["npm"])
+    npm = (
+        str(Path(npm_value).resolve())
+        if Path(npm_value).is_file()
+        else shutil.which(npm_value)
+    )
     if not node or not npm:
         raise RuntimeError(
             "The Pi bundle requires Node.js >=22.19.0 and npm on the target"
@@ -37,7 +41,17 @@ def install(request: dict) -> dict:
     # Separate workspace sessions share one bundle. Serialize npm ci so a second
     # bootstrap cannot delete dependencies underneath a running installation.
     with (base / ".install.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        if os.name == "nt":
+            import msvcrt
+
+            lock.write("\0")
+            lock.flush()
+            lock.seek(0)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock, fcntl.LOCK_EX)
         bundle = install_bundle(request, base, node, npm)
     return {**bundle, "workspace": str(workspace)}
 
@@ -84,7 +98,7 @@ def install_bundle(request: dict, base: Path, node: str, npm: str) -> dict:
             save(base / name, content)
         subprocess.run(
             [
-                npm,
+                *([node, npm] if npm.endswith(".js") else [npm]),
                 "ci",
                 "--omit=dev",
                 "--no-audit",

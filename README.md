@@ -2,6 +2,8 @@
 
 当前 Web 产品在 VPS4 保存并运行 DSH 会话，其他机器通过 `dsh web --remote` 打开。同一会话可以在页面切换执行机器与目录，文件侧栏与工具跟随工作区，多个窗口共享历史并接力输入。目标文件和命令由上游 Pi 工具通过 MCP 执行。安装与使用见 [云端 DSH](DSH_REMOTE.md)。
 
+新设备可在 Web 点击“接入新设备”，选择 Linux、macOS 或 Windows 安装包，下载后在目标机器运行。安装器自动准备依赖、登记机器与建立出站连接。Linux 已经过实际安装验证；macOS 和 Windows 提供预览安装包。
+
 原有 `pi --remote` 终端入口仍可使用，安装、跨机器 /resume、工作区切换、输入权与 fork 规则见 [云端 Pi 会话](CLOUD_SESSIONS.md)。下面保留单工作区启动器和 MCP 网关的使用方式。
 
 ~~~text

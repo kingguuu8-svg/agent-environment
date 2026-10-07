@@ -17,10 +17,12 @@ def install(args):
     if not node:
         raise ValueError("Node.js is required")
     args.bin_dir.mkdir(parents=True, exist_ok=True)
-    destination = args.bin_dir / "dsh"
-    marker = "# remote-dsh launcher"
+    destination = args.bin_dir / ("dsh.cmd" if os.name == "nt" else "dsh")
+    marker = "remote-dsh launcher"
     if destination.exists() and marker not in destination.read_text():
-        backup = args.bin_dir / ".dsh-before-remote"
+        backup = args.bin_dir / (
+            ".dsh-before-remote.cmd" if os.name == "nt" else ".dsh-before-remote"
+        )
         if backup.exists():
             raise ValueError(
                 "An earlier DSH backup exists; inspect it before replacing"
@@ -34,15 +36,22 @@ def install(args):
         if "nativeCommand" in previous:
             profile["nativeCommand"] = previous["nativeCommand"]
     fd = os.open(config, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    os.fchmod(fd, 0o600)
-    with os.fdopen(fd, "w") as output:
+    if os.name != "nt":
+        os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as output:
         output.write(json.dumps(profile, indent=2) + "\n")
     # Unlink a symlink so installation cannot overwrite the upstream package.
     if destination.is_symlink():
         destination.unlink()
-    destination.write_text(
-        f'#!/bin/sh\n{marker}\nexec {shlex.quote(node)} {shlex.quote(str(root / "dsh.mjs"))} "$@"\n'
-    )
+    if os.name == "nt":
+        destination.write_text(
+            f'@echo off\nchcp 65001 >nul\nrem {marker}\n"{node}" "{root / "dsh.mjs"}" %*\n',
+            encoding="utf-8",
+        )
+    else:
+        destination.write_text(
+            f'#!/bin/sh\n# {marker}\nexec {shlex.quote(node)} {shlex.quote(str(root / "dsh.mjs"))} "$@"\n'
+        )
     destination.chmod(0o755)
     print(f"Installed: {destination} web --remote")
 

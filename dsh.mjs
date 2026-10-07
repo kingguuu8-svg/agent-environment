@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readJson } from "./environment.mjs";
+import { readJson } from "./state-json.mjs";
 const args = process.argv.slice(2);
 const remote = args.includes("--remote");
 let command, forwarded;
@@ -20,7 +20,9 @@ if (remote) {
   if (!command) throw new Error("Local DSH is not installed. Use dsh web --remote");
   forwarded = args;
 }
-const child = spawn(command[0], [...command.slice(1), ...forwarded], { stdio: "inherit" });
+// Windows batch launchers require cmd.exe; remote Node entry stays direct.
+const shell = process.platform === "win32" && /\.(cmd|bat)$/i.test(command[0]);
+const child = spawn(command[0], [...command.slice(1), ...forwarded], { stdio: "inherit", shell });
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => child.kill(signal));
 child.on("error", (error) => { console.error(error.message); process.exitCode = 1; });
 child.on("exit", (code, signal) => { process.exitCode = code ?? (signal ? 1 : 0); });

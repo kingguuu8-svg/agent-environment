@@ -5,12 +5,12 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, posix, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
-import { readJson, writeJson } from "./environment.mjs";
+import { readJson, writeJson } from "./state-json.mjs";
 const quote = (value) => "'" + String(value).replaceAll("'", "'\\''") + "'";
 const { values } = parseArgs({ options: { workspace: { type: "string" }, port: { type: "string" }, "no-open": { type: "boolean" }, profile: { type: "string" }, foreground: { type: "boolean" }, "connection-only": { type: "boolean" } } });
 const profileFile = resolve(values.profile ?? process.env.REMOTE_DSH_PROFILE ?? join(homedir(), ".config/remote-dsh/client.json"));
@@ -33,6 +33,9 @@ function open(url) {
   if (!values["no-open"] && (process.env.DISPLAY || process.env.WAYLAND_DISPLAY)) {
     const browser = spawn("xdg-open", [url], { stdio: "ignore", detached: true });
     browser.on("error", () => {}); browser.unref();
+  } else if (!values["no-open"] && ["darwin", "win32"].includes(process.platform)) {
+    const browser = process.platform === "darwin" ? spawn("open", [url], { stdio: "ignore", detached: true }) : spawn(profile.python, ["-c", "import sys,webbrowser;webbrowser.open(sys.argv[1])", url], { stdio: "ignore", detached: true, windowsHide: true });
+    browser.on("error", () => {}); browser.unref();
   }
 }
 if (profile.localState) {
@@ -50,7 +53,32 @@ if (profile.localState) {
   const cacheDir = join(homedir(), ".cache/remote-dsh"); mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
   const id = createHash("sha256").update(JSON.stringify(profile)).digest("hex").slice(0, 16);
   const cacheFile = join(cacheDir, id + ".json");
-  if (!values.foreground) {
+  if (!values.foreground && profile.nativeJobs) {
+    const name = "web-" + id;
+    const port = Number(values.port ?? profile.localPort ?? 3081);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid local port");
+    const manager = (action) => {
+      const result = spawnSync(profile.python, [join(fileURLToPath(new URL(".", import.meta.url)), "device_services.py"), action, "--name", name, "--node", process.execPath, "--entry", fileURLToPath(import.meta.url), "--profile", profileFile, "--port", String(port)], { encoding: "utf8", windowsHide: true });
+      if (result.status !== 0) throw new Error(result.stderr?.trim() || "Background connection failed");
+      return JSON.parse(result.stdout);
+    };
+    manager("web-start");
+    const deadline = Date.now() + 300000;
+    let ready, refreshed = false;
+    while (Date.now() < deadline) {
+      const candidate = readJson(cacheFile);
+      if (candidate?.port === port && candidate.pid === manager("web-status").pid) {
+        try {
+          const response = await fetch(launchUrl(candidate, port), { redirect: "manual", signal: AbortSignal.timeout(2000) });
+          if ([302, 303].includes(response.status)) { ready = candidate; break; }
+          if (!refreshed) { refreshed = true; manager("web-restart"); }
+        } catch { /* The supervisor reconnects without replaying user work. */ }
+      }
+      await delay(500);
+    }
+    if (!ready) throw new Error("Cloud connection is not ready; inspect remote-dsh-device/jobs logs");
+    open(launchUrl(ready, port));
+  } else if (!values.foreground) {
     const unitName = `remote-dsh-web-${id}.service`;
     const directory = join(homedir(), ".config/systemd/user"); mkdirSync(directory, { recursive: true });
     const unitFile = join(directory, unitName);
@@ -96,10 +124,10 @@ if (profile.localState) {
     if (cloud.port) args.push("-p", String(cloud.port));
     if (cloud.identity_file) args.push("-i", cloud.identity_file, "-o", "IdentitiesOnly=yes");
     if (cloud.known_hosts_file) args.push("-o", `UserKnownHostsFile="${cloud.known_hosts_file.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`);
-    const command = [cloud.node ?? "node", join(cloud.base, "dsh-entry.mjs"), "--state", cloud.state ?? join(cloud.base, "dsh-state")];
+    const command = [cloud.node ?? "node", posix.join(cloud.base, "dsh-entry.mjs"), "--state", cloud.state ?? posix.join(cloud.base, "dsh-state")];
     if (profile.machine) command.push("--machine", profile.machine);
     args.push(cloud.host, command.map(quote).join(" "));
-    const child = spawn("ssh", args, { stdio: ["pipe", "pipe", "inherit"] });
+    const child = spawn("ssh", args, { stdio: ["pipe", "pipe", "inherit"], windowsHide: true });
     const lines = createInterface({ input: child.stdout });
     const timer = setTimeout(() => { console.error("Cloud entry timed out; inspect the connection before retrying"); child.kill(); }, 300000);
     lines.once("line", (line) => {

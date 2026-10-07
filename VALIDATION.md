@@ -51,6 +51,37 @@ dsh web --remote --no-open
 
 恢复脚本会暂时停止设备连接和重启 Host，应在空闲时运行。私有启动信息与完整验证记录位于忽略目录中。该版本验证了个人 Linux 环境；其他操作系统、多人权限隔离、远端扩展与持久交互式终端尚未覆盖。安装和维护方式见 [云端 DSH](DSH_REMOTE.md)。
 
+## 设备安装
+
+2026 年 10 月 7 日，Web 已提供 Linux、macOS 和 Windows 安装包选择。设备通过出站 SSH 连接到 VPS4，本机使用 Python 工具桥接进程运行原生 Pi 工具。Linux 安装在 VPS1 的全新普通用户上验证；macOS 与 Windows 为预览版，尚未完成对应系统的真机安装验证。
+
+| 验证对象 | 入口与环境 | 结果 |
+| --- | --- | --- |
+| 三种安装包、配对与失败恢复 | `verify_device_onboarding.py`，真实文件、公钥、并发登记与 loopback HTTP 下载 | 14 项通过 |
+| 工具桥接、目录与取消 | `verify_device_bridge.py`，真实 Pi 工具与两个并行工作区 | 7 项通过 |
+| 下载、安装、重复运行、Web 登录与后台服务恢复 | `verify_device_vps.py`，VPS4 与 VPS1 的隔离普通用户 | 6 项通过 |
+
+配对验证覆盖临时凭据过期、同一安装包只能登记一台设备、SSH 强制命令与转发范围、并发端口分配、登记响应丢失和使用新安装包恢复同一设备。三种包均携带对应系统 x64 与 arm64 的官方 fd 归档，核对固定 SHA256；Linux 与 macOS 脚本通过 Bash 语法检查，Windows ZIP 中的 Python 解码代码在 Linux 上实际提取全部文件并逐项比较。Windows 模板还通过微软 PowerShell 解析器检查；这些结果覆盖脚本与打包行为，原生系统安装仍需真机验证。
+
+下载验证使用真实 HTTP 端点中断传输，确认重新获取完整文件、连续失败三次后结束以及拒绝超出大小上限的响应。目标机访问 GitHub 曾连续超时，因此部署时准备 fd 归档并随安装包分发；首次安装提前准备 ripgrep，七个 Pi 工具可在安装完成后直接使用。
+
+桥接验证拒绝错误令牌，并在认证后延迟 10.2 秒传输工具包，确认较慢传输不会触发认证阶段的期限。验证还覆盖工作区上下文、实际文件浏览、全部七个工具、并行工作区、取消命令及取消后的继续调用。
+
+VPS 验证从已认证 Web 获取独立安装包，在仅有系统 PATH 的全新用户中运行。重复安装保持设备身份、端口与两个后台进程的 PID；无需重启 Host 即可在目录选择器发现设备。云端运行全部七个工具，并从目标机独立读取文件确认副作用。已安装的 `dsh` 入口完成原生 Web 登录；删除临时解压目录后重启工具桥接与 SSH 连接，认证握手恢复，七个工具再次成功执行。测试结束后移除临时账号、云端登记、工作区与配对凭据。
+
+本轮同时通过既有 SSH 工具的 23 项回归和模型上下文的 12 项回归。Web 检查三种系统选择、匹配的运行说明、预览提示、有效期与再次下载状态，以及 Escape 关闭；实际 Linux 安装包通过 API 保存并执行。内置浏览器的文件保存事件未取得验证证据。
+
+复现设备检查：
+
+```bash
+.venv/bin/python verify_device_onboarding.py
+.venv/bin/python verify_device_bridge.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
+dsh web --remote --no-open
+.venv/bin/python verify_device_vps.py --url-file /home/kingguuu8/.cache/remote-dsh/a36ca3ce857334ca.json
+```
+
+VPS 检查应在云端会话空闲时运行，清理临时登记会重启 Host。验证报告位于忽略目录中的 `.local/verification-device-onboarding.json`、`.local/verification-device-bridge.json` 与 `.local/verification-device-vps.json`；部署文件的 SHA256 和回滚位置记录在 `.local/dsh-device-platform-deployment.json`。
+
 ## Pi 终端记录
 
 云端 Pi 会话已部署在 VPS 4，VPS 1 和 VPS 4 的终端可以接入同一份历史。验证覆盖输入权接管、独立分支、工作区切换、终端断线、共享连接取消以及服务重启。真实模型同时操作 VPS 1 的项目与 VPS 4 的云端目录。验证日期为 2026-10-07。
@@ -180,7 +211,7 @@ vps1__bash
 
 ## 范围与清理
 
-当前验证覆盖单用户 Linux、云端直接 SSH 登录目标、Pi 原生工具、工作区上下文、常驻 SDK 会话与额外 HTTP MCP。终端复用 Pi 的主要界面组件，完整 Pi 命令集、文件补全、图片粘贴、远端 skills 与扩展、持久 PTY 和 NAT 反向接入仍在后续范围。新提示等待当前任务结束后提交；运行期间可接管、取消和安排工作区切换。实际 NAS 尚未连接。
+前述 Pi 终端验证覆盖单用户 Linux、云端直接 SSH 登录目标、Pi 原生工具、工作区上下文、常驻 SDK 会话与额外 HTTP MCP。终端复用 Pi 的主要界面组件，完整 Pi 命令集、文件补全、图片粘贴、远端 skills 与扩展及持久 PTY 仍在后续范围。新设备的反向接入由 DSH 工具桥接连接提供。新提示等待当前任务结束后提交；运行期间可接管、取消和安排工作区切换。实际 NAS 尚未连接。
 
 隔离验证结束后关闭临时服务、worker、SSH agent 和 loopback sshd，删除远端测试目录、临时会话与模型配置。VPS 上的常驻部署、专用密钥、演示工作区和演示会话继续保留。临时验证的模型凭据通过 SSH stdin 进入进程环境；常驻服务从受权限保护的环境文件读取。完整 JSON 报告与客户端记录位于 Git 忽略的 .local 目录。
 

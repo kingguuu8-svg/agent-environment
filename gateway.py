@@ -8,6 +8,7 @@ import os
 import re
 import shlex
 import sys
+import tempfile
 import weakref
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -121,6 +122,32 @@ def ssh_args(target: dict) -> list[str]:
 
 
 async def bootstrap(target: dict) -> dict:
+    if target.get("kind") == "bridge":
+        reader, writer = await asyncio.open_connection(
+            "127.0.0.1", target["port"], limit=1024 * 1024
+        )
+        try:
+            request = {
+                "workspace": target["workspace"],
+                "files": {name: (ROOT / name).read_text() for name in BUNDLE_FILES},
+                "npm_registry": target.get(
+                    "npm_registry", "https://registry.npmjs.org"
+                ),
+            }
+            # Authenticate with a small header before transferring the tool bundle.
+            writer.write(
+                json.dumps({"token": target["token"], "action": "bootstrap"}).encode()
+                + b"\n"
+            )
+            writer.write(json.dumps(request).encode() + b"\n")
+            await writer.drain()
+            result = json.loads(await asyncio.wait_for(reader.readline(), 245))
+            if not result["ok"]:
+                raise RuntimeError(result["error"])
+            return result["value"]
+        finally:
+            writer.close()
+            await writer.wait_closed()
     command = shlex.join([target["python"], "-c", (ROOT / "bootstrap.py").read_text()])
     process = await asyncio.create_subprocess_exec(
         "ssh",
@@ -214,6 +241,28 @@ class Backend:
             if "SSH_AUTH_SOCK" in os.environ
             else None,
         )
+        connection_file = None
+        if self.target.get("kind") == "bridge":
+            with tempfile.NamedTemporaryFile(
+                mode="w", prefix="dsh-bridge-", delete=False
+            ) as private:
+                json.dump(
+                    {
+                        "port": self.target["port"],
+                        "token": self.target["token"],
+                        "workspace": self.info["workspace"],
+                    },
+                    private,
+                )
+                connection_file = Path(private.name)
+            params = StdioServerParameters(
+                command=sys.executable,
+                args=[
+                    str(ROOT / "bridge_client.py"),
+                    "--connection-file",
+                    str(connection_file),
+                ],
+            )
         try:
             async with stdio_client(params) as (read, write):
                 async with CancellationClientSession(
@@ -238,6 +287,8 @@ class Backend:
         finally:
             self.session = None
             self.tools = []
+            if connection_file:
+                connection_file.unlink(missing_ok=True)
             if self.state != "failed":
                 self.state = "disconnected"
             await self.cancel_calls()

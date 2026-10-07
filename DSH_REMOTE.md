@@ -50,22 +50,27 @@ Agent 还有一个 `environment` 工具，可以列出已经登记的工作区�
 
 额外 HTTP MCP 服务可写入 VPS4 的 `dsh-targets.json` 中的 `mcp` 字段，重启 Host 后生效；格式与已有 `environment.mjs` 一致。新机器登记后，目录选择器重新读取配置，无需重启 Host。
 
-## 接入一台 Linux 电脑
+## 接入新设备
 
-当前安装面向个人 Linux 环境，依赖 Node.js 22.19+、Python 3.11+、OpenSSH 客户端与 sshd、systemd 用户服务。首次工具安装需要访问 npm；Pi 搜索工具缺少依赖时还会访问 GitHub。
+在 Web 的“工作环境”或新建会话面板点击“接入新设备”，选择新机器的操作系统，下载专属安装包。在新机器运行它，安装器会准备依赖、登记设备、建立后台连接并打开云端页面。安装后，在任意项目目录执行 `dsh web --remote`，即可用该设备的目录新建会话。
 
-在新电脑准备项目依赖及已有 VPS4 SSH 登录配置后，执行：
+| 目标系统 | 安装包 | 运行方式 | 后台连接 |
+| --- | --- | --- | --- |
+| Linux | `dsh-connect-linux.sh` | `bash dsh-connect-linux.sh` | systemd 用户服务 |
+| macOS | `dsh-connect-mac.command` | `bash dsh-connect-mac.command` | launchd，用户登录后启动 |
+| Windows 10 / 11 | `dsh-connect-windows.zip` | 解压后双击 `dsh-connect.cmd` | 用户启动目录，登录后启动 |
 
-```bash
-uv sync --python 3.12
-npm ci
-uv run python setup-dsh-device.py --config .local/vps-check.json --machine laptop
-dsh web --remote
-```
+Linux 已在 VPS1 的全新普通用户上实际安装验证。macOS 与 Windows 的安装包标为预览；目前有打包、协议与脚本检查，尚未完成对应系统的真机安装验证。Node 运行时支持 x64 和 arm64；Windows 的 Bash 使用 Git for Windows。
 
-安装器在当前用户目录创建专用密钥、仅监听 loopback 的 SSH 工具端点和到 VPS4 的反向连接，并登记机器与安装入口。整个配置使用用户服务，保持已有系统 SSH 服务与防火墙配置。每个设备使用不同的机器编号与云端反向端口，例如第二台电脑使用 `--machine laptop --label 笔记本 --cloud-port 42023`。入口目录默认是 `~/.local/bin`，应已加入 PATH。
+Linux 需要可用的 systemd 用户服务，缺少系统依赖时会请求 sudo；Python 版本过低时，在用户目录准备运行时。macOS 缺少 Python 时，会请求管理员密码安装官方 Python。Windows 自动准备用户目录内的 Python、Node.js 和 Git Bash，缺少 OpenSSH 客户端时，需要以管理员运行一次。首次安装需要访问 Python、Node、npm 和 GitHub 的下载服务。安装包携带已校验的文件查找依赖，并在安装时提前准备 Pi 的搜索依赖。
 
-一个设备运行时固定对应一个机器编号和端口组合，重复安装沿用原身份。当前电脑的编号为 `desktop`，本地 SSH 端口为 22222，VPS4 的反向端口为 42022；入口安装在已有的 pnpm 命令目录。
+新设备只向 VPS4 发起出站 SSH 连接，本机工具桥接端点仅监听 loopback。云端通过反向连接调用原生 Pi 工具，使用安装者的系统权限。安装包包含工具桥接程序和 `dsh` 入口；Agent、模型配置和记录保存在 VPS4。
+
+安装包中的临时配对凭据有效期为 15 分钟，只能登记一台设备。下载后请留在自己的设备上。安装失败可重跑同一文件；登记成功后，即使临时凭据已过期，重跑也沿用本机保存的设备身份。尚未完成登记且凭据过期时，在页面重新下载。并发安装、配对响应丢失与云端部分写入使用同一份请求恢复，机器编号和端口由平台分配。
+
+设备文件保存在 `~/.local/share/remote-dsh-device`，`dsh` 默认安装到 `~/.local/bin`；安装器为后续终端准备 PATH。可用 `--name 笔记本` 指定名称，或 `--no-open` 完成安装后暂不打开浏览器。命令入口会保留此前已有的本机 DSH。
+
+已接入的 `desktop` 和 VPS1 沿用原有 SSH 工具连接。维护已有连接仍可使用仓库中的 `setup-dsh-device.py`；Web 下载的安装包使用工具桥接连接。
 
 ## VPS4 部署
 
@@ -86,7 +91,7 @@ uv run python deploy_dsh_vps.py --config .local/vps-check.json --model cpa/gpt-6
 | 机器配置与模型配置 | `dsh-targets.json`、`dsh-models.json` |
 | 模型凭据 | `dsh-model.env`，权限 600 |
 
-VPS4 Web 只监听 loopback 的 3080，通过 SSH 转发访问。设备入口密钥限制为固定机器身份的启动命令及必要端口转发。工具端点只接受 VPS4 的专用公钥。该版本服务于同一位用户；共享 Web 登录具备整个个人环境的操作权限。
+VPS4 Web 只监听 loopback 的 3080，通过 SSH 转发访问。设备入口密钥限制为固定机器身份的启动命令、Web 转发及分配给该设备的反向端口。临时配对密钥只允许配对命令，带有效期并禁用转发。安装包固定 VPS4 主机公钥；工具桥接请求使用单独的私有认证令牌。该版本服务于同一位用户；共享 Web 登录具备整个个人环境的操作权限。
 
 ## 维护与恢复
 
@@ -100,15 +105,17 @@ systemctl --user restart remote-dsh.service
 
 重启后重新运行本机 `dsh web --remote` 获取最新登录入口。已保存的会话与工作区恢复，旧输入权失效，窗口重新获得输入权。中断的工具调用保留其已发生的文件影响，后续请求检查实际状态。
 
-本机的工具连接可以分别检查或重启：
+新接入的 Linux 设备可分别检查或重启：
 
 ```bash
-systemctl --user status remote-dsh-device-sshd.service remote-dsh-device-link.service
+systemctl --user status remote-dsh-device-bridge.service remote-dsh-device-link.service
 systemctl --user restart remote-dsh-device-link.service
 systemctl --user list-units 'remote-dsh-web-*'
 ```
 
-暂停云端产品可在 VPS4 执行 `systemctl --user disable --now remote-dsh.service`；配置与会话继续保留。停止本机接入可执行 `systemctl --user disable --now remote-dsh-device-link.service remote-dsh-device-sshd.service`，再停止列表中的 Web 转发服务。若恢复此前的本机 DSH 入口，安装器保存的命令位于入口目录的 `.dsh-before-remote`。
+macOS 的后台任务位于 `~/Library/LaunchAgents/dev.remote-dsh.*.plist`，Windows 位于用户启动目录中的 `RemoteDSH-*.lnk`。三个系统的连接日志都保存在 `~/.local/share/remote-dsh-device/jobs`，断开后后台任务会重连。需要修复依赖或恢复连接时，可以重跑安装器。
+
+暂停云端产品可在 VPS4 执行 `systemctl --user disable --now remote-dsh.service`；配置与会话继续保留。停止新 Linux 设备的接入可执行 `systemctl --user disable --now remote-dsh-device-link.service remote-dsh-device-bridge.service`，再停止列表中的 Web 转发服务；既有 `desktop` 的工具服务名为 `remote-dsh-device-sshd.service`。若恢复此前的本机 DSH 入口，安装器保存的命令位于入口目录的 `.dsh-before-remote`，Windows 为 `.dsh-before-remote.cmd`。
 
 升级前备份 `dsh-home`、`dsh-state` 和私有配置。回滚使用同一备份对应的源码与锁定依赖，重新生成 profile 后重启 Host。原有 Pi 云端服务使用独立会话目录，可继续通过 `pi --remote` 访问。
 
