@@ -82,6 +82,27 @@ dsh web --remote --no-open
 
 VPS 检查应在云端会话空闲时运行，清理临时登记会重启 Host。验证报告位于忽略目录中的 `.local/verification-device-onboarding.json`、`.local/verification-device-bridge.json` 与 `.local/verification-device-vps.json`；部署文件的 SHA256 和回滚位置记录在 `.local/dsh-device-platform-deployment.json`。
 
+### 接入进度
+
+2026 年 10 月 8 日，接入页补充真实连接反馈与返回目录选择的行为。配对状态由云端记录提供，连接可用性由原生工作区文件工具检查；并行页面共享准备过程。轮询只在页面可见时运行，完成或关闭后结束。
+
+| 验证对象 | 入口与环境 | 结果 |
+| --- | --- | --- |
+| 等待、部分注册、完成、过期与非法输入 | `verify_device_onboarding.py`，真实配对文件和 CLI | 16 项通过 |
+| 鉴权、并行检查、离线与恢复、状态和会话边界 | `verify_device_feedback.py`，隔离 DSH Host 与真实工具桥 | 4 项通过 |
+| 独立安装包与连接反馈 | `verify_device_vps.py`，VPS4 与 VPS1 全新普通用户 | 7 项通过 |
+| 工作区与实际模型系统提示词 | `verify_dsh_context.py`，真实 SSH 与 HTTP 请求记录 | 12 项通过 |
+
+浏览器验证确认：进入接入页并返回，原机器、未提交路径和筛选保持；重复点击已选择的 Linux 保留安装包；真实配对后从工具准备变为已连接，点击入口返回新设备的目录选择，仍等待用户确认。切换机器时显示新目标路径。页面验证使用隔离配置和真实本机工具桥；实际 Linux 包通过 Web API 保存并在 VPS1 执行。浏览器保存文件事件、macOS 与 Windows 的原生安装仍未覆盖。
+
+复现进度检查：
+
+```bash
+.venv/bin/python verify_device_feedback.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
+```
+
+报告位于 `.local/verification-device-feedback.json`。
+
 ## Pi 终端记录
 
 云端 Pi 会话已部署在 VPS 4，VPS 1 和 VPS 4 的终端可以接入同一份历史。验证覆盖输入权接管、独立分支、工作区切换、终端断线、共享连接取消以及服务重启。真实模型同时操作 VPS 1 的项目与 VPS 4 的云端目录。验证日期为 2026-10-07。

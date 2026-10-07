@@ -19,7 +19,7 @@ from pathlib import Path
 
 from build_device_installer import bundle
 from device_installer import download_bytes, fd_archive
-from device_onboarding import create, pair, save
+from device_onboarding import create, pair, save, status
 
 ROOT = Path(__file__).resolve().parent
 
@@ -84,6 +84,7 @@ def run():
             return next(iter(added)).name, installer
 
         token, installer = issue()
+        assert installer["pairingId"] == token
         assert 0 < installer["expiresAt"] / 1000 - time.time() <= 900
         assert "__PACKAGE__" not in installer["content"]
         subprocess.run(
@@ -104,6 +105,20 @@ def run():
             )
         passed(
             "standalone installer has expiring restricted pairing and no retained cloud private key"
+        )
+        configuration = (runtime / "dsh-targets.json").read_bytes()
+        waiting = status(runtime, state, token)
+        assert waiting == {
+            "phase": "waiting",
+            "platform": "linux",
+            "expiresAt": installer["expiresAt"],
+        }
+        for invalid in [None, 123, [], "../receipt", "A" * 32]:
+            rejected(lambda value=invalid: status(runtime, state, value), "Invalid")
+        rejected(lambda: status(runtime, state, "0" * 32), "找不到")
+        assert (runtime / "dsh-targets.json").read_bytes() == configuration
+        passed(
+            "installer progress validates identity and reports waiting without exposing pairing credentials or mutating targets"
         )
         sources = bundle(ROOT)["files"]
         assert set(sources) == {
@@ -288,6 +303,43 @@ def run():
         passed(
             "successful registration and repeated claim preserve existing devices and exact SSH permissions"
         )
+        receipt_path = state / "pairing" / token / "receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["complete"] = False
+        save(receipt_path, receipt)
+        assert status(runtime, state, token)["phase"] == "registering"
+        assert "machine" not in status(runtime, state, token)
+        receipt["complete"] = True
+        receipt["expiresAt"] = int(time.time()) - 1
+        save(receipt_path, receipt)
+        registered_status = status(runtime, state, token)
+        assert registered_status["phase"] == "registered"
+        assert registered_status["machine"] == {
+            "id": first["machine"],
+            "label": request["label"],
+            "workspace": request["workspace"],
+        }
+        wire = json.loads(
+            subprocess.check_output(
+                [
+                    sys.executable,
+                    str(ROOT / "device_onboarding.py"),
+                    "status",
+                    "--runtime",
+                    str(runtime),
+                    "--state",
+                    str(state),
+                    "--pairing",
+                    token,
+                ]
+            )
+        )
+        assert wire == registered_status
+        receipt["expiresAt"] = installer["expiresAt"] / 1000
+        save(receipt_path, receipt)
+        passed(
+            "partial claims stay registering and completed registration remains available after installer expiry through the CLI"
+        )
         rejected(
             lambda: pair(
                 runtime,
@@ -328,6 +380,7 @@ def run():
         receipt["expiresAt"] = int(time.time()) - 1
         save(receipt_path, receipt)
         before = (runtime / "dsh-targets.json").read_bytes()
+        assert status(runtime, state, token4)["phase"] == "expired"
         rejected(
             lambda: pair(runtime, state, user_home, token4, copy.deepcopy(request)),
             "已过期",

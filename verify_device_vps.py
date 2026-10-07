@@ -10,7 +10,7 @@ from pathlib import Path
 
 from deploy_cloud_vps import python_run
 from gateway import load_targets
-from verify_dsh import DshApi
+from verify_dsh import DshApi, wait_for
 
 ROOT = Path(__file__).resolve().parent
 
@@ -153,6 +153,11 @@ def run(args):
         )
         pairing_id = pairing["pairingId"]
         assert re.fullmatch(r"[a-f0-9]{32}", pairing_id)
+        assert package["pairingId"] == pairing_id
+        assert (
+            api.remote("deviceInstallerStatus", {"pairingId": pairing_id})["phase"]
+            == "waiting"
+        )
         prepared = json.loads(
             python_run(target, PREPARE, {"name": name, "installer": package["content"]})
         )
@@ -160,6 +165,21 @@ def run(args):
         identity = json.loads(python_run(target, INSTALL, prepared))
         passed(
             "standalone downloaded package provisions a clean Linux account and connects to VPS4"
+        )
+        feedback = wait_for(
+            lambda: api.remote("deviceInstallerStatus", {"pairingId": pairing_id}),
+            lambda value: value.get("connection", {}).get("status") == "online",
+            timeout=180,
+        )
+        assert feedback["phase"] == "registered"
+        assert feedback["machine"] == {
+            "id": identity["machine"],
+            "label": name,
+            "workspace": prepared["workspace"],
+        }
+        assert "token" not in feedback and "entryPublicKey" not in feedback
+        passed(
+            "installer progress changes from waiting to registered and online only after a real workspace tool check"
         )
         again = json.loads(python_run(target, INSTALL, prepared))
         assert identity == again

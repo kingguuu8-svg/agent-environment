@@ -180,6 +180,47 @@ def create(runtime, state, user_home, target_os="linux"):
             "content": content,
             "encoding": "base64" if target_os == "windows" else "utf-8",
             "expiresAt": expires * 1000,
+            "pairingId": pairing_id,
+        }
+
+
+def status(runtime, state, pairing_id):
+    if not isinstance(pairing_id, str) or not re.fullmatch(r"[a-f0-9]{32}", pairing_id):
+        raise ValueError("Invalid pairing identity")
+    with locked(state / "pairing.lock"):
+        path = state / "pairing" / pairing_id / "receipt.json"
+        if not path.exists():
+            raise ValueError("找不到安装器记录，请重新下载安装器。")
+        receipt = json.loads(path.read_text())
+        result = receipt.get("result", {})
+        target = json.loads((runtime / "dsh-targets.json").read_text())["targets"].get(
+            result.get("machine")
+        )
+        registered = receipt.get("complete") and target is not None
+        phase = (
+            "registered"
+            if registered
+            else "expired"
+            if receipt["expiresAt"] <= time.time()
+            else "registering"
+            if result
+            else "waiting"
+        )
+        return {
+            "phase": phase,
+            "platform": receipt.get("targetOs", "linux"),
+            "expiresAt": receipt["expiresAt"] * 1000,
+            **(
+                {
+                    "machine": {
+                        "id": result["machine"],
+                        "label": target.get("label", result["machine"]),
+                        "workspace": target["workspace"],
+                    }
+                }
+                if registered
+                else {}
+            ),
         }
 
 
@@ -362,7 +403,7 @@ def pair(runtime, state, user_home, pairing_id, request):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["create", "pair"])
+    parser.add_argument("action", choices=["create", "pair", "status"])
     parser.add_argument("--runtime", type=Path, required=True)
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--pairing")
@@ -372,6 +413,8 @@ def main():
     args = parser.parse_args()
     if args.action == "create":
         result = create(args.runtime, args.state, Path.home(), args.platform)
+    elif args.action == "status":
+        result = status(args.runtime, args.state, args.pairing)
     else:
         request = json.loads(sys.stdin.buffer.read(65537))
         result = pair(args.runtime, args.state, Path.home(), args.pairing, request)

@@ -45,6 +45,7 @@ export class RemoteWorkspaces extends TypertRemoteService {
     this.operations = new Map();
     this.connectionChecks = new Map();
     this.checkingConnections = new Map();
+    this.deviceChecks = new Map();
     ctx.effect(() => () => this.environment.close(), "remote: transports");
     ctx.sessionProjections.register({
       key: "remoteBinding", stateVersion: 1, stateSchema: projectionSchema,
@@ -203,6 +204,30 @@ export class RemoteWorkspaces extends TypertRemoteService {
     if (!["linux", "mac", "windows"].includes(request.platform ?? "linux")) fail("请选择 Linux、macOS 或 Windows");
     const { stdout } = await execute(this.python, [join(this.runtimeDir, "device_onboarding.py"), "create", "--runtime", this.runtimeDir, "--state", this.stateDir, "--platform", request.platform ?? "linux"], { signal, timeout: 15000, maxBuffer: 16 * 1024 * 1024 });
     return JSON.parse(stdout);
+  }
+  async deviceInstallerStatus(request, signal) {
+    checkRequest(request);
+    if (typeof request.pairingId !== "string" || !/^[a-f0-9]{32}$/.test(request.pairingId)) fail("Invalid pairing identity");
+    const { stdout } = await execute(this.python, [join(this.runtimeDir, "device_onboarding.py"), "status", "--runtime", this.runtimeDir, "--state", this.stateDir, "--pairing", request.pairingId], { signal, timeout: 5000, maxBuffer: 65536 });
+    const result = JSON.parse(stdout);
+    if (result.phase !== "registered") return result;
+    this.reloadTargets();
+    const machine = result.machine;
+    let check = this.deviceChecks.get(machine.id);
+    const staleAfter = check?.value.status === "online" ? 65000 : 10000;
+    if (!check || !check.promise && Date.now() - check.value.checkedAt >= staleAfter) {
+      check = { value: { status: "checking", checkedAt: Date.now() } };
+      this.deviceChecks.set(machine.id, check);
+      // First bootstrap can take minutes. Share it across watching tabs and
+      // return progress immediately; leaving a dialog preserves shared tools.
+      check.promise = (async () => {
+        try {
+          const id = await this.environment.register(machine.id, machine.workspace);
+          check.value = await this.probe({ target: id });
+        } catch (error) { check.value = { status: "unavailable", checkedAt: Date.now(), error: errorMessage(error) }; }
+      })().finally(() => { check.promise = null; });
+    }
+    return { ...result, connection: check.value };
   }
   connectionState(id) {
     const checked = this.connectionChecks.get(id);
@@ -435,7 +460,7 @@ export class RemoteWorkspaces extends TypertRemoteService {
 }
 
 // Native JS decorators keep this plugin on DSH's authenticated Typert RPC carrier.
-for (const method of ["catalog", "deviceInstaller", "browse", "pick", "get", "probe", "control", "switch", "discardSwitch", "input"]) {
+for (const method of ["catalog", "deviceInstaller", "deviceInstallerStatus", "browse", "pick", "get", "probe", "control", "switch", "discardSwitch", "input"]) {
   Remote(RemoteWorkspaces.prototype[method], { kind: "method", name: method, private: false, static: false, addInitializer: (initializer) => invocationInitializers.push(initializer) });
 }
 
