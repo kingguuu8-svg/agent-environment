@@ -54,9 +54,13 @@ export class RemoteWorkspaces extends TypertRemoteService {
       wire: { viewSchema: projectionSchema, view: (state) => state },
     });
     const controlSchema = schema.object({ clientId: schema.string(), label: schema.string() }).nullable();
-    ctx.sessionProjections.register({ key: "remoteController", stateVersion: 1, stateSchema: controlSchema, init: () => null,
-      apply: (state, event) => event.type === "remote/controller" ? event.data : state,
-      wire: { viewSchema: controlSchema, view: (state) => state } });
+    ctx.sessionProjections.register({ key: "remoteController", stateVersion: 2,
+      stateSchema: schema.object({ inheritedEventCount: schema.number().int().nonnegative(), controller: controlSchema }),
+      init: (_header, inheritedEventCount) => ({ inheritedEventCount, controller: null }),
+      // A branch borrows history, including controller events. Only events in
+      // its own log can establish that independent session's input owner.
+      apply: (state, event) => event.type === "remote/controller" && event.seq >= state.inheritedEventCount ? { ...state, controller: event.data } : state,
+      wire: { viewSchema: controlSchema, view: (state) => state.controller } });
     ctx.on("agent/created", async ({ agent }) => {
       const state = this.state(agent.session);
       if (!state.current) return;
@@ -159,8 +163,21 @@ export class RemoteWorkspaces extends TypertRemoteService {
     if (result.error) throw result.error;
     return result.agent;
   }
+  controllerLease(agent) {
+    let lease = this.leases.get(agent.id);
+    if (!lease) {
+      const saved = this.host.sessionProjections.stateOf(agent.session, "remoteController").controller;
+      if (saved) {
+        // Restore the window identity, while fencing requests from the previous
+        // process with a fresh epoch. Reading as a viewer cannot claim ownership.
+        lease = { ...saved, epoch: randomUUID() };
+        this.leases.set(agent.id, lease);
+      }
+    }
+    return lease;
+  }
   view(agent, clientId) {
-    const lease = this.leases.get(agent.id);
+    const lease = this.controllerLease(agent);
     const state = this.state(agent.session);
     return { ...state, current: state.current ? { ...state.current, hostname: this.binding(state.current.id).hostname } : null,
       pending: state.pending ? { ...state.pending, hostname: this.binding(state.pending.id).hostname } : null,
@@ -168,7 +185,7 @@ export class RemoteWorkspaces extends TypertRemoteService {
       running: agent.status === "running", control: lease ? { mine: lease.clientId === clientId, label: lease.label, epoch: lease.clientId === clientId ? lease.epoch : null } : null };
   }
   requireControl(agent, request) {
-    const lease = this.leases.get(agent.id);
+    const lease = this.controllerLease(agent);
     if (!lease || lease.clientId !== request.clientId || lease.epoch !== request.epoch) fail("此会话已由另一窗口接管。请点击“接管输入”后继续。");
   }
   commitSession(session, binding) {
@@ -307,7 +324,7 @@ export class RemoteWorkspaces extends TypertRemoteService {
     if (typeof request.clientId !== "string" || !/^[a-zA-Z0-9-]{16,80}$/.test(request.clientId)) fail("Invalid controller identity");
     const agent = await this.agent(request.sessionId);
     return this.serialize(agent.id, async () => {
-      const current = this.leases.get(agent.id);
+      const current = this.controllerLease(agent);
       if (!current || current.clientId === request.clientId || request.takeover === true) {
         if (!current || current.clientId !== request.clientId) {
           const lease = { clientId: request.clientId, label: String(request.label ?? "Web 窗口").slice(0, 80), epoch: randomUUID() };

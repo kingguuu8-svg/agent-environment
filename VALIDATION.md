@@ -10,6 +10,7 @@
 | 取消、目标离线、进程丢失、Host 重启 | `verify_dsh_recovery.py`，VPS4 与当前电脑，真实模型与实际服务停启 | 7 项通过 |
 | 新 HTTP MCP 的发现与调用 | `verify_dsh_mcp.py`，独立 DSH Host、真实模型、临时 HTTP MCP 服务 | 2 项通过 |
 | 模型请求、环境选择与连接状态 | `verify_dsh_context.py`，独立 Host、loopback SSH、实际 HTTP 录制端点 | 12 项通过 |
+| 输入权持久恢复与分支独立 | `verify_dsh_ownership.py`，独立原生 Host、本地 SSE 模型、两次停启 | 7 项通过 |
 | 既有 Pi MCP 工具行为 | `verify_local.py`，独立 loopback sshd | 23 项通过 |
 | 既有远端工作区入口 | `verify_workspace_local.py`，两个并行目录与 HTTP MCP | 11 项通过 |
 
@@ -31,7 +32,7 @@ HTTP MCP 验证使用随机工具名，提示词只描述需要的功能。模�
 
 部署后的真实模型会话日志包含 3 次系统消息，均包含当前执行环境；记录覆盖 VPS4 云端工作区与 VPS1。运行文件与本地源码的 SHA256 一致，云端 DSH、Pi 以及本机设备连接服务均保持运行。
 
-重启检查让远端命令先追加一次记录，再等待；保存待切换目标后重启 VPS4 Host。原生会话恢复到该目标，旧输入权失效，已追加记录仍为一行，命令后半段没有执行。插件事件携带 DSH 的 `ignorable` 外层字段，绑定与控制权操作使用原生 `sessions.flush` 作为持久化检查点。早期演示日志经过带原件备份的修复，已有跨机器对话恢复并保留完整内容。
+重启检查让远端命令先追加一次记录，再等待；保存待切换目标后重启 VPS4 Host。原生会话恢复到该目标，旧输入凭据失效，已追加记录仍为一行，命令后半段没有执行。插件事件携带 DSH 的 `ignorable` 外层字段，绑定与控制权操作使用原生 `sessions.flush` 作为持久化检查点。早期演示日志经过带原件备份的修复，已有跨机器对话恢复并保留完整内容。
 
 实际 Web 操作从本机目录新建会话，由模型写入并读回 `ui-proof.txt`，随后通过目录选择组件将同一会话切到 VPS1，写入并读回 `ui-vps1-proof.txt`。模型保留上一轮操作本机的上下文，文件侧栏切到 VPS1 的目录。Host 多次重启后，该对话仍可打开。两个 Web 窗口检查共享历史、只读输入与接管；文件预览使用原生侧栏。
 
@@ -47,9 +48,20 @@ dsh web --remote --no-open
 .venv/bin/python verify_dsh_recovery.py --config .local/vps-check.json --url-file /home/kingguuu8/.cache/remote-dsh/a36ca3ce857334ca.json --workspace .local/dsh-user-demo
 .venv/bin/python verify_dsh_mcp.py --models .local/dsh-dev/models.json --model-env .local/dsh-dev/model.env
 .venv/bin/python verify_dsh_context.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
+.venv/bin/python verify_dsh_ownership.py --node /home/kingguuu8/.local/node/bin/node
 ```
 
 恢复脚本会暂时停止设备连接和重启 Host，应在空闲时运行。私有启动信息与完整验证记录位于忽略目录中。该版本验证了个人 Linux 环境；其他操作系统、多人权限隔离、远端扩展与持久交互式终端尚未覆盖。安装和维护方式见 [云端 DSH](DSH_REMOTE.md)。
+
+## Web 输入权恢复
+
+2026 年 10 月 8 日，在隔离 Host 中复现了维护重启丢失控制窗口的问题：查看者先请求输入权后获得控制，原窗口随后变成只读。现版从原生会话日志恢复控制窗口，并为新进程生成新的输入凭据；分支日志中的继承事件保留为历史，输入权由分支自己的事件决定。
+
+`verify_dsh_ownership.py` 的 7 项检查通过真实原生 API 验证首次控制、查看者只读、明确接管、分支绑定与输入权独立、两次进程停启、旧凭据与外来窗口被拒绝，以及正确控制者重命名后结果持久保存。测试通过本地 SSE 响应完成真实 Agent 对话流程；模型服务费用为零。旧版 Host 产生的版本 1 缓存也在独立环境中升级验证：先到达的查看者保持只读，原窗口获得新的凭据。
+
+浏览器验证完成两轮模拟模型对话，确认两个新窗口身份不同、当前窗口刷新及插件更新保留身份；服务重启后原窗口继续可输入，查看者保持只读；明确接管后再次重启，新控制窗口可以直接发送。草稿在断线、发送失败、页面刷新和恢复后保留，重连期间没有自动提交。相关的 12 项模型上下文与连接回归、5 项实际工具桥和设备反馈回归全部通过。验证保留用户实际会话，临时 Host 与模型服务在结束后清理。
+
+新版在云端所有会话空闲时备份并部署。13 个部署源码文件的 SHA256 与本地一致；已有两个控制者从日志恢复，随机查看者保持只读；三个原生工作区可读取，云端、当前电脑和 VPS1 的真实文件工具探测通过，机器列表保持原值。用户原页面完成重连，保留会话与工作区，并按已有控制记录显示输入权限。
 
 ## 设备安装
 

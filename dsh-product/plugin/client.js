@@ -9,9 +9,11 @@ window.__ModuleLoader__.load({
 
     function apply(ctx) {
       const clientId = (() => {
-        // Keep this tab's controller on reload. A fresh tab gets a fresh identity,
+        // Keep this tab's controller on reload or plugin reload. A fresh tab gets a fresh identity,
         // including a tab that starts with a copied sessionStorage snapshot.
         try {
+          const current = document.documentElement.dataset.remoteDshClient;
+          if (/^[a-zA-Z0-9-]{16,80}$/.test(current ?? "")) return current;
           const key = "remote-dsh-controller";
           const previous = sessionStorage.getItem(key);
           const navigation = performance.getEntriesByType("navigation")[0]?.type;
@@ -46,8 +48,8 @@ window.__ModuleLoader__.load({
         if (!result.ok) throw new Error(result.error.message);
         return result.value;
       };
-      const control = async (sessionId, takeover = false) => {
-        const value = await api("control", { sessionId, clientId, label, takeover });
+      const control = async (sessionId, takeover = false, signal) => {
+        const value = await api("control", { sessionId, clientId, label, takeover }, signal);
         leases.set(sessionId, value);
         return value;
       };
@@ -72,7 +74,7 @@ window.__ModuleLoader__.load({
         return creatingSession;
       };
       const controlled = async (method, request, signal) => {
-        const value = leases.get(request.sessionId) ?? await control(request.sessionId);
+        const value = await control(request.sessionId, false, signal);
         if (!value.control?.mine) throw new Error("此窗口正在查看会话。点击顶部“接管输入”后即可操作。");
         return api(method, { ...request, clientId, epoch: value.control.epoch }, signal);
       };
