@@ -13,7 +13,9 @@
 | 输入权持久恢复与分支独立 | `verify_dsh_ownership.py`，独立原生 Host、本地 SSE 模型、两次停启 | 7 项通过 |
 | 客户端发送失败与返回结果 | `verify_dsh_client.mjs`，实际客户端拦截器、loopback HTTP 服务 | 4 项通过 |
 | 多窗口草稿与会话选择恢复 | `verify_dsh_drafts.mjs`，原生 Store 引擎、实际工厂与插件、模拟浏览器存储 | 13 项通过 |
-| 文件侧栏与工作区切换顺序 | `verify_dsh_files.mjs`，实际客户端组件、原生文件树与 Store、React 渲染器 | 7 项通过 |
+| 文件侧栏与引用菜单切换顺序 | `verify_dsh_files.mjs`，实际客户端组件、原生文件树、引用控制器与 Store、React 渲染器 | 8 项通过 |
+| 远端文件补全与实际引用读取 | `verify_dsh_references.py`，独立 Host、loopback SSH、本地 SSE 模型与真实 Pi 工具 | 10 项通过 |
+| 原生搜索、工具更新与迟到结果 | `verify_workspace_references.mjs`，锁定的 DSH 搜索、实际 MCP worker 与 Host 路由 | 7 项通过 |
 | 启动等待、取消与登录恢复 | `verify_dsh_launcher.py`，独立 Host、loopback SSH、真实 Linux 用户服务 | 16 项通过 |
 | 既有 Pi MCP 工具行为 | `verify_local.py`，独立 loopback sshd | 23 项通过 |
 | 既有远端工作区入口 | `verify_workspace_local.py`，两个并行目录与 HTTP MCP | 11 项通过 |
@@ -56,6 +58,9 @@ dsh web --remote --no-open
 /home/kingguuu8/.local/node/bin/node verify_dsh_client.mjs
 node verify_dsh_drafts.mjs
 node verify_dsh_files.mjs
+node dsh-product/sync-file-search.mjs --check
+node verify_workspace_references.mjs
+.venv/bin/python verify_dsh_references.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
 .venv/bin/python verify_dsh_launcher.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
 ```
 
@@ -154,6 +159,22 @@ node verify_dsh_files.mjs
 8 项真实浏览器检查使用独立 Host 与 loopback SSH：双向切换的根目录和列表正确，同名文件分别预览实际 A、B 的内容；查看窗口保持只读，切走会话期间另端切换后再返回也能关闭旧预览。侧栏在切换期间保持收起，明确重开后读取新目录。模型只收到两次准备历史的请求，文件验证没有提交模型消息。客户端 HTTP 异常 4 项、多窗口恢复 13 项、依赖锁一致性、JavaScript 语法、Python lint 与格式检查通过。临时 Host、模型、SSH、代理、目录与浏览器页已清理。证据位于 `.local/verification-dsh-files-before.json`、`.local/verification-dsh-files-component.json` 与 `.local/verification-dsh-files-ui.json`；该轮覆盖 Linux 浏览器环境，macOS 与 Windows 真机仍待验证。
 
 会话空闲且没有待切换目标时，仅替换 VPS4 的 `dsh-product/plugin/client.js` 并重启 Host；测试渲染器保留为本地开发依赖。运行客户端与验证源码哈希一致，35 个已有会话的五项投影与绑定、7 个工作区分组、机器目录和六份配置保持。26 个原控制者恢复，随机查看者只读；三台机器的原生文件浏览与实际工具探测通过。真实页面只读刷新后保留会话标题、执行位置和查看权限，目标已连接；生产检查没有提交消息或接管输入。证据位于 `.local/verification-dsh-files-deployed.json`，原客户端备份位于 VPS4 的 `dsh-state/backups/file-projection-*`；回滚时恢复其 `client.js` 并重启 Host。
+
+## Web 远端文件引用
+
+2026 年 10 月 8 日，实际原生 `fileReferences/list` 请求复现远端 `@文件` 搜索返回空结果：相同查询在云端找到云端文件，远端目录中已有对应文件却没有候选。修复路由后继续复现另一问题：候选菜单已经打开时切换工作区，菜单仍显示原目录的文件。
+
+Host 现在将绑定会话的原生补全请求发送到当前目标 worker，普通 DSH 会话沿用原实现。worker 使用锁定的 DSH 搜索源码，通过现有只读文件资源返回路径；工具包文件列表和运行依赖保持。搜索结果返回前再次检查执行目标，迟到的旧结果被丢弃。客户端切换当前目标时关闭实际原生 `@` 菜单，待切换状态继续使用原目录。
+
+`verify_dsh_references.py` 的 10 项检查使用真实 Host、SSH 与文件，覆盖云端和远端候选、排除目录、目录内查询、中文空格文件名、隐藏文件、非法路径与符号链接、并行查看、目标失效与恢复、同一会话往返切换和重启恢复。本地 SSE 模型实际收到带引号的文件引用与当前远端系统上下文，随后调用 Pi `read`，返回远端文件的标记；云端同名文件内容保持不同，未被读入该结果。总共两次模型 HTTP 请求，服务费用为零。
+
+`verify_workspace_references.mjs` 的 7 项检查比较实际上游搜索结果，并通过真实 MCP worker 检查工具写入后的索引更新、取消后继续使用、非法查询拒绝，以及工作区切换后迟到结果无法发布。普通 DSH 和插件卸载后的原生方法恢复通过。`verify_dsh_files.mjs` 扩展为 8 项，使用实际原生引用控制器确认旧菜单关闭，迟到候选无法重新打开；文件树和待切换状态回归继续通过。
+
+7 项隔离浏览器检查覆盖云端候选、切换后旧菜单关闭与草稿保留、新远端候选、原生引用选择、目录内补全、中文空格文件，以及刷新后保留引用文本。模型仅收到两次准备历史的请求，浏览器文件检查没有发送消息。相关回归通过：模型上下文与接力 18 项、客户端异常 4 项、多窗口恢复 13 项、Pi MCP 23 项、真实工具桥 7 项。生成内容核对、JavaScript 语法、Python lint、格式和 diff 检查通过。临时 Host、模型、SSH、代理、目录与浏览器页已清理。
+
+空闲维护更新了 VPS4 的五份 Host、客户端、插件清单与 worker 源码，并同步 VPS1 的两份 worker 源码，备份保留。运行源码哈希与本地一致；35 个已有会话的五项投影与绑定、7 个工作区分组、机器目录及六份配置保持，26 个原控制者恢复。云端、桌面与 VPS1 的原生 `fileReferences/list` 返回真实候选，与同一目标的原生目录列表一致；查看请求保持控制关系。产品原页面只读刷新后保留会话、执行位置和查看权限，输入框保持为空。生产验证没有发送消息、切换工作区或接管。
+
+本轮证据位于 `.local/verification-dsh-references-before.json`、`.local/verification-dsh-references.json`、`.local/verification-dsh-references-ui.json` 和 `.local/verification-dsh-references-deployed.json`。VPS4 备份位于 `dsh-state/backups/file-references-*`，VPS1 为 `backups/file-references-*`；按各自 `manifest.json` 恢复源码与权限，在 VPS4 重启 Host 即可回滚。模糊搜索沿用上游后台刷新时的旧索引行为，目录查询读取实时目录。macOS、Windows 真机仍待验证。
 
 ## 设备安装
 

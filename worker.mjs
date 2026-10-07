@@ -24,7 +24,7 @@ import { hostname } from "node:os";
 import { resolve } from "node:path";
 import { parseArgs, promisify } from "node:util";
 import { Value } from "typebox/value";
-import { readWorkspaceFile } from "./workspace-files.mjs";
+import { invalidateWorkspaceReferences, readWorkspaceFile } from "./workspace-files.mjs";
 
 const { values } = parseArgs({
   options: {
@@ -167,6 +167,8 @@ if (values.manifest) {
       };
     } catch (error) {
       return { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] };
+    } finally {
+      invalidateWorkspaceReferences(workspace);
     }
   });
   const close = () => {

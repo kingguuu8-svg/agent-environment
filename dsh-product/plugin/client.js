@@ -5,7 +5,7 @@ window.__ModuleLoader__.load({
     const { Modal } = require("@deepseek-ai/dsh-client-ui-primitives");
     const h = React.createElement;
     const { useState, useEffect, useRef, useSyncExternalStore } = React;
-    const inject = ["connection", "sessions", "workspaces", "slots", "uiWorkspace", "layout", "sidebarRight"];
+    const inject = ["connection", "sessions", "workspaces", "slots", "uiWorkspace", "layout", "sidebarRight", "inputTriggers"];
 
     class CloudConnectionError extends Error {
       constructor(cause) {
@@ -50,6 +50,7 @@ window.__ModuleLoader__.load({
       const label = originMachine === "cloud" ? "VPS4 Web" : `${originMachine} Web`;
       const originalCall = ctx.connection.rpc.call.bind(ctx.connection.rpc);
       const leases = new Map();
+      const referenceTargets = new Map();
       const listeners = new Set();
       let createOpen = false;
       let creation = { busy: false, error: "", workspaceId: null };
@@ -513,6 +514,17 @@ window.__ModuleLoader__.load({
           const timer = setInterval(visible, 30000);
           document.addEventListener("visibilitychange", visible);
           return () => { disposed = true; abort.abort(); clearInterval(timer); document.removeEventListener("visibilitychange", visible); };
+        }, [current?.id, sessionId]);
+        useEffect(() => {
+          if (!current) return;
+          const previous = referenceTargets.get(sessionId);
+          referenceTargets.set(sessionId, current.id);
+          if (!previous || previous === current.id) return;
+          const scope = ctx.sessions.scope(sessionId);
+          if (scope) {
+            const trigger = ctx.inputTriggers.sessionOf(scope);
+            if (trigger.menu.getSnapshot().hit?.trigger === "@") trigger.dismiss();
+          }
         }, [current?.id, sessionId]);
         useEffect(() => {
           // A switch RPC can arrive before its native projection. FilesBody reads

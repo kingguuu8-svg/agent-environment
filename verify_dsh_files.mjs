@@ -11,6 +11,18 @@ const require = createRequire(new URL("./dsh-product/package.json", import.meta.
 const React = require("react");
 const { act, create } = require("react-test-renderer");
 const storeEngine = await import(require.resolve("@deepseek-ai/dsh-client-store"));
+const triggerSource = await readFile(require.resolve("@deepseek-ai/dsh-client-ui-input-trigger/package.json").replace("package.json", "lib/client.js"), "utf8");
+let nativeTrigger;
+runInNewContext(triggerSource, {
+  window: { __ModuleLoader__: { load(definition) { nativeTrigger = definition.factory((name) => {
+    if (name === "react") return React;
+    if (name === "react/jsx-runtime") return require(name);
+    if (name === "@deepseek-ai/dsh-client-store") return storeEngine;
+    if (name === "@deepseek-ai/cordis") return { Service: class {} };
+    if (name === "@deepseek-ai/dsh-client-ui-primitives") return {};
+    throw new Error(`Unexpected trigger dependency ${name}`);
+  }); } } }, AbortController, console,
+});
 const clientSource = await readFile(process.argv[2] ?? new URL("./dsh-product/plugin/client.js", import.meta.url), "utf8");
 const nativeSource = await readFile(require.resolve("@deepseek-ai/dsh-client-ui-sidebar-files/package.json").replace("package.json", "lib/client.js"), "utf8");
 const exportAnchor = "exports.apply = apply;";
@@ -45,6 +57,10 @@ async function fixture() {
   const tabs = storeEngine.createSnapshotStore({ expanded: true, tabs: [] });
   const fileStore = native.test.createFilesStore().create("session-1");
   const controllers = new Map(), cleanup = [], listeners = new Map();
+  const scope = {};
+  let completeCandidates;
+  const referenceSource = { name: "reference", trigger: "@", candidates() { return new Promise((resolve) => { completeCandidates = resolve; }); } };
+  const trigger = new nativeTrigger.InputTriggerController({ actx: scope, sessionId: "session-1", roster: { all: () => [referenceSource], sources: () => [referenceSource] } });
   let serial = 0, rpcView = { ...projection.getSnapshot(), control: { mine: true }, connection: { status: "online" } }, root;
   const face = native.test.filesFace(async (_sessionId, path, signal) => {
     const entries = (await readdir(path)).map((name) => ({ name, type: "file" }));
@@ -84,6 +100,7 @@ async function fixture() {
     throw new Error(`Unexpected client dependency ${name}`);
   });
   plugin.apply({
+    sessions: { scope: () => scope }, inputTriggers: { sessionOf: () => trigger },
     uiWorkspace: { selection: storeEngine.createSnapshotStore({}), startSession() {} }, sidebarRight: sidebar,
     connection: { rpc: { async call(_channel, endpoint) {
       if (endpoint === "remoteWorkspaces/get") return { ok: true, value: rpcView };
@@ -119,8 +136,9 @@ async function fixture() {
     assert.deepEqual(entries(), [join(expectedRoot, filename)]);
   };
   const notify = async () => settle(() => { for (const listener of listeners.get("visibilitychange") ?? []) listener(); });
-  return { a, b, projection, tabs, tree, entries, ready, setView(value) { rpcView = { ...value, control: { mine: true }, connection: { status: "online" } }; }, notify, settle,
-    async close() { await settle(() => root.unmount()); for (const controller of controllers.values()) controller.abort(); for (const dispose of cleanup.reverse()) dispose?.(); } };
+  return { a, b, projection, tabs, tree, entries, ready, trigger, completeCandidates(value) { completeCandidates(value); },
+    setView(value) { rpcView = { ...value, control: { mine: true }, connection: { status: "online" } }; }, notify, settle,
+    async close() { await settle(() => root.unmount()); trigger.dispose(); for (const controller of controllers.values()) controller.abort(); for (const dispose of cleanup.reverse()) dispose?.(); } };
 }
 
 let checks = 0;
@@ -132,11 +150,18 @@ try {
   passed("the actual native file tree initially lists the current project");
 
   const originalTabs = test.tabs.getSnapshot().tabs;
+  test.trigger.track("@only", 5, { tier: "editable" }, 1);
+  assert.equal(test.trigger.menu.getSnapshot().open, true);
   test.setView({ current: test.b, pending: null, revision: 1 });
   await test.notify();
   assert.deepEqual(test.tabs.getSnapshot().tabs, originalTabs);
   assert.equal(test.tree(), projectA);
   passed("an RPC arriving first cannot seed a new file tree from the old native projection");
+  assert.equal(test.trigger.menu.getSnapshot().open, false);
+  test.completeCandidates([{ name: "only-a.txt" }]);
+  await test.settle();
+  assert.equal(test.trigger.menu.getSnapshot().open, false);
+  passed("a switch closes the actual native reference menu and a late old response cannot reopen it");
 
   await test.settle(() => test.projection.set({ current: test.b, pending: null, revision: 1 }));
   await test.settle();
@@ -154,15 +179,20 @@ try {
   passed("projection-first delivery and its later RPC render the old project once without replacing its tabs again");
 
   test.setView({ current: test.a, pending: test.b, revision: 3 });
+  test.trigger.track("@only-b", 7, { tier: "editable" }, 2);
+  test.completeCandidates([{ name: "only-a.txt" }]);
+  await test.settle();
   await test.notify();
   await test.settle(() => test.projection.set({ current: test.a, pending: test.b, revision: 3 }));
   assert.deepEqual(test.tabs.getSnapshot().tabs, returnedTabs);
   assert.equal(test.tree(), projectA);
+  assert.equal(test.trigger.menu.getSnapshot().open, true);
   passed("a pending switch leaves the running project's file tree intact");
 
   test.setView({ current: test.b, pending: null, revision: 4 });
   await test.notify();
   assert.equal(test.tree(), projectA);
+  assert.equal(test.trigger.menu.getSnapshot().open, false);
   await test.settle(() => test.projection.set({ current: test.b, pending: null, revision: 4 }));
   await test.settle();
   await test.ready(projectB, "only-b.txt");

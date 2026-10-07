@@ -16,7 +16,7 @@ import lockfile from "proper-lockfile";
 import { Environment, readJson, writeJson } from "../../environment.mjs";
 
 export const name = "remote-workspaces";
-export const inject = ["agents", "sessions", "sessionController", "sessionProjections", "tools", "systemPrompt", "workspaceFiles", "workspaceRegistry"];
+export const inject = ["agents", "sessions", "sessionController", "sessionProjections", "tools", "systemPrompt", "workspaceFiles", "workspaceRegistry", "fileReferences"];
 export const Config = z.object({ stateDir: z.string().required(), targets: z.string().required(), python: z.string().required(), cloudWorkspace: z.string().required() });
 const eventType = "remote/workspace";
 const handoffEventType = "remote/handoff";
@@ -134,6 +134,7 @@ export class RemoteWorkspaces extends TypertRemoteService {
       },
     }));
     this.installFileRouting();
+    this.installReferenceRouting();
     this.installInputGuard();
   }
 
@@ -448,6 +449,22 @@ export class RemoteWorkspaces extends TypertRemoteService {
   async scopeBinding(scope) {
     const agent = await this.agent(scope.sessionId);
     return this.state(agent.session).current;
+  }
+  installReferenceRouting() {
+    const references = this.host.fileReferences;
+    const original = references.list;
+    const service = this;
+    const routed = async function(agent, query, signal) {
+      const current = service.state(agent.session).current;
+      if (!current) return original.call(this, agent, query, signal);
+      const candidates = await service.fileRequest(current.id, { op: "references", query }, signal);
+      signal.throwIfAborted();
+      // A query admitted before a handoff must not offer the former machine's
+      // candidates after the session's default execution target has changed.
+      return service.state(agent.session).current?.id === current.id ? candidates : [];
+    };
+    references.list = routed;
+    this.host.effect(() => () => { if (references.list === routed) references.list = original; }, "remote: file reference routing");
   }
   async routeFile(scope, path, request, signal) {
     const binding = await this.scopeBinding(scope);
