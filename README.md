@@ -1,6 +1,8 @@
 # Remote Pi MCP tools
 
-这个原型让 Pi agent 会话绑定一个远端工作区。对话和模型配置保存在 agent 所在机器，文件、搜索与命令工具运行在 SSH 目标机器，项目指令也从目标目录读取。原有多机器 MCP 网关继续提供带机器前缀的工具。
+这个原型在 VPS 4 保存并运行 Pi 会话，让其他机器通过 pi --remote 接入。终端可以接力输入，每个会话有独立的默认工作区，并能调用云端、其他工作区和额外 MCP 服务的工具。Pi SDK 管理模型调用、上下文整理和 JSONL 会话；目标文件和命令由上游 Pi 工具执行。
+
+新入口的安装、跨机器 /resume、工作区切换、输入权与 fork 规则见 [云端会话](CLOUD_SESSIONS.md)。下面保留原有单工作区启动器和 MCP 网关的使用方式。
 
 ~~~text
 MCP 客户端 / agent
@@ -158,4 +160,4 @@ uv run python verify_workspace_vps.py --config .local/vps-check.json --agent-mod
 
 workspace 是 Pi 工具的默认工作目录。文件工具支持绝对路径、上级目录和符号链接，文件与命令访问权限由 SSH 登录用户决定。bash 每次执行独立 shell，跨调用的目录与环境需要在命令中显式指定。HTTP 入口服务于能够访问该入口的客户端。
 
-当前适配范围覆盖 Linux 目标上的 Pi 工具、工作区上下文资源和 Pi SDK 会话。启动器退出会关闭自己拥有的 stdio 网关与远端 worker；HTTP 网关的生命周期由启动它的进程管理。工作区入口会在 SSH 断开后的后续调用前尝试重连，已经发送且失败的调用返回错误，由 agent 判断后续操作。统一 agent 的常驻服务、终端 UI、持久 PTY 和其他 MCP 能力需要继续接入。
+当前适配范围覆盖 Linux 目标上的 Pi 工具、工作区上下文资源和 Pi SDK 会话。单工作区启动器退出会关闭自己拥有的 stdio 网关与远端 worker；HTTP 网关的生命周期由启动它的进程管理。工作区入口会在 SSH 断开后的后续调用前尝试重连，已经发送且失败的调用返回错误，由 agent 判断后续操作。云端常驻服务、终端入口和额外 MCP 工具见 [云端会话](CLOUD_SESSIONS.md)。bash 每次执行独立 shell，持久 PTY 仍需后续接入。

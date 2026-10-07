@@ -28,15 +28,21 @@ function sameBinding(left, right) {
   return ["machine", "host", "port", "workspace", "uri"].every((key) => left?.[key] === right[key]);
 }
 
-function remotePath(binding, path) {
-  const authority = binding.uri.slice(0, binding.uri.indexOf("/", "ssh://".length));
+export function remotePath(binding, path) {
+  const authority = binding.uri.slice(0, binding.uri.indexOf("/", binding.uri.indexOf("://") + 3));
   return authority + path.split("/").map(encodeURIComponent).join("/");
 }
 
 export async function openWorkspace(options) {
   const client = new Client({ name: "remote-pi-session", version: "0.1.0" });
   let transport;
-  if (options.url) {
+  if (options.localWorkspace) {
+    transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [join(root, "worker.mjs"), "--workspace", options.localWorkspace],
+      stderr: "inherit",
+    });
+  } else if (options.url) {
     transport = new StreamableHTTPClientTransport(new URL(options.url));
   } else {
     if (!options.config || !options.machine) throw new Error("Provide --config and --machine, or --url");
@@ -66,7 +72,12 @@ export async function openWorkspace(options) {
     }
     const fetchContext = async (signal) => {
       const result = await client.readResource({ uri: contextUri }, { timeout: 30000, signal });
-      return JSON.parse(result.contents[0].text);
+      const context = JSON.parse(result.contents[0].text);
+      if (options.localWorkspace) context.binding = {
+        machine: "cloud", host: context.hostname, port: null, workspace: context.workspace,
+        uri: `local://${context.hostname}${context.workspace.split("/").map(encodeURIComponent).join("/")}`,
+      };
+      return context;
     };
     const context = await fetchContext();
     return { client, descriptors, context, fetchContext, close: () => client.close() };

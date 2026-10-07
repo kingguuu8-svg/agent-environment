@@ -1,0 +1,8 @@
+{
+  "machine": "devbox",
+  "cloud": {
+    "host": "user@your-cloud-server",
+    "base": ".local/share/remote-mcp-demo",
+    "node": "node"
+  }
+}
