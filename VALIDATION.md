@@ -1,5 +1,44 @@
 # 验证记录
 
+## DSH Web 产品
+
+2026 年 10 月 7 日，DSH Web Host 已部署在 VPS4，VPS1 与当前电脑均已接入。真实模型使用 `cpa/gpt-6-sol`，工具使用锁定的 Pi 1.0.2；DSH 使用 0.2.0-rc.2。下面的结果对应 `feature/dsh-remote-workspaces` 分支。
+
+| 验证对象 | 入口与环境 | 结果 |
+| --- | --- | --- |
+| 会话、排队切换、输入权、文件作用域 | `verify_dsh.py`，Agent 在 VPS4，目标 VPS1，真实模型 | 16 项通过 |
+| 取消、目标离线、进程丢失、Host 重启 | `verify_dsh_recovery.py`，VPS4 与当前电脑，真实模型与实际服务停启 | 7 项通过 |
+| 新 HTTP MCP 的发现与调用 | `verify_dsh_mcp.py`，独立 DSH Host、真实模型、临时 HTTP MCP 服务 | 2 项通过 |
+| 既有 Pi MCP 工具行为 | `verify_local.py`，独立 loopback sshd | 23 项通过 |
+| 既有远端工作区入口 | `verify_workspace_local.py`，两个并行目录与 HTTP MCP | 11 项通过 |
+
+会话验证检查执行中保持旧目标、撤回与重新安排切换、旧版本选择被拒绝，以及切换前已经排队的消息在新目标执行。重复提交同一请求编号后，目标文件只追加一行。非法目录保留旧绑定，原生文件预览拒绝工作区外路径。原生 fork 继承历史和绑定，输入权独立；接管后旧窗口的提交被拒绝，原生 prompt API 也无法绕过控制权。
+
+恢复验证实际停止本机反向 SSH 服务，检查文件读取、目录选择和工作区切换均被拒绝，云端仍能读取自己的文件。目标恢复后，原文件侧栏通过同一绑定重新工作。另一个检查只终止 DSH 自己的云端文件 worker，后续请求重新连接，无需先运行模型。
+
+HTTP MCP 验证使用随机工具名，提示词只描述需要的功能。模型通过 `environment` 首次发现实际工具契约，调用该工具后写入结果；服务端调用记录与工作区文件独立复核通过。显式调用额外服务后，会话的默认工作区保持原值。
+
+重启检查让远端命令先追加一次记录，再等待；保存待切换目标后重启 VPS4 Host。原生会话恢复到该目标，旧输入权失效，已追加记录仍为一行，命令后半段没有执行。插件事件携带 DSH 的 `ignorable` 外层字段，绑定与控制权操作使用原生 `sessions.flush` 作为持久化检查点。早期演示日志经过带原件备份的修复，已有跨机器对话恢复并保留完整内容。
+
+实际 Web 操作从本机目录新建会话，由模型写入并读回 `ui-proof.txt`，随后通过目录选择组件将同一会话切到 VPS1，写入并读回 `ui-vps1-proof.txt`。模型保留上一轮操作本机的上下文，文件侧栏切到 VPS1 的目录。Host 多次重启后，该对话仍可打开。两个 Web 窗口检查共享历史、只读输入与接管；文件预览使用原生侧栏。
+
+启动验证检查本机重复执行 `dsh web --remote` 复用后台服务、使用不同目录的入口提示，并在 CLI 退出后继续访问已认证的 Web API。Host 重启后命令获取新登录信息。VPS1 的已安装入口通过专用受限 SSH 密钥建立实际 Web 转发，返回 VPS1 的目录提示并完成原生登录。本机普通 `dsh --version` 保持可用。设备重复安装复用身份；更换机器编号、端口以及非法输入在修改配置前被拒绝。
+
+复现本次本机工具与 DSH 检查：
+
+```bash
+.venv/bin/python verify_local.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
+.venv/bin/python verify_workspace_local.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
+dsh web --remote --no-open
+.venv/bin/python verify_dsh.py --url-file /home/kingguuu8/.cache/remote-dsh/a36ca3ce857334ca.json --origin http://127.0.0.1:3081
+.venv/bin/python verify_dsh_recovery.py --config .local/vps-check.json --url-file /home/kingguuu8/.cache/remote-dsh/a36ca3ce857334ca.json --workspace .local/dsh-user-demo
+.venv/bin/python verify_dsh_mcp.py --models .local/dsh-dev/models.json --model-env .local/dsh-dev/model.env
+```
+
+恢复脚本会暂时停止设备连接和重启 Host，应在空闲时运行。私有启动信息与完整验证记录位于忽略目录中。该版本验证了个人 Linux 环境；其他操作系统、多人权限隔离、远端扩展与持久交互式终端尚未覆盖。安装和维护方式见 [云端 DSH](DSH_REMOTE.md)。
+
+## Pi 终端记录
+
 云端 Pi 会话已部署在 VPS 4，VPS 1 和 VPS 4 的终端可以接入同一份历史。验证覆盖输入权接管、独立分支、工作区切换、终端断线、共享连接取消以及服务重启。真实模型同时操作 VPS 1 的项目与 VPS 4 的云端目录。验证日期为 2026-10-07。
 
 ## 云端会话结果

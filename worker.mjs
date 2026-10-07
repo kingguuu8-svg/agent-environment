@@ -24,6 +24,7 @@ import { hostname } from "node:os";
 import { resolve } from "node:path";
 import { parseArgs, promisify } from "node:util";
 import { Value } from "typebox/value";
+import { readWorkspaceFile } from "./workspace-files.mjs";
 
 const { values } = parseArgs({
   options: {
@@ -128,7 +129,12 @@ if (values.manifest) {
     }],
   }));
   server.setRequestHandler(ReadResourceRequestSchema, async (request, extra) => {
-    if (request.params.uri !== contextUri) throw new Error(`Unknown resource: ${request.params.uri}`);
+    const uri = request.params.uri;
+    if (uri.startsWith("workspace://files?")) {
+      const query = JSON.parse(new URL(uri).searchParams.get("request"));
+      return { contents: [{ uri, mimeType: "application/json", text: JSON.stringify(await readWorkspaceFile(workspace, query, extra.signal)) }] };
+    }
+    if (uri !== contextUri) throw new Error(`Unknown resource: ${uri}`);
     return { contents: [{
       uri: contextUri, mimeType: "application/json",
       text: JSON.stringify(await workspaceContext(extra.signal)),

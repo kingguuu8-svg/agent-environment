@@ -1,8 +1,8 @@
-# Remote Pi MCP tools
+# 云端多机器 Agent
 
-这个原型在 VPS 4 保存并运行 Pi 会话，让其他机器通过 pi --remote 接入。终端可以接力输入，每个会话有独立的默认工作区，并能调用云端、其他工作区和额外 MCP 服务的工具。Pi SDK 管理模型调用、上下文整理和 JSONL 会话；目标文件和命令由上游 Pi 工具执行。
+当前 Web 产品在 VPS4 保存并运行 DSH 会话，其他机器通过 `dsh web --remote` 打开。同一会话可以在页面切换执行机器与目录，文件侧栏与工具跟随工作区，多个窗口共享历史并接力输入。目标文件和命令由上游 Pi 工具通过 MCP 执行。安装与使用见 [云端 DSH](DSH_REMOTE.md)。
 
-新入口的安装、跨机器 /resume、工作区切换、输入权与 fork 规则见 [云端会话](CLOUD_SESSIONS.md)。下面保留原有单工作区启动器和 MCP 网关的使用方式。
+原有 `pi --remote` 终端入口仍可使用，安装、跨机器 /resume、工作区切换、输入权与 fork 规则见 [云端 Pi 会话](CLOUD_SESSIONS.md)。下面保留单工作区启动器和 MCP 网关的使用方式。
 
 ~~~text
 MCP 客户端 / agent

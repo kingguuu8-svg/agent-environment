@@ -84,6 +84,13 @@ class WorkspaceGateway(Gateway):
 
         @self.server.read_resource()
         async def read_resource(uri):
+            if str(uri).startswith("workspace://files?"):
+                backend = await self.ensure_connection()
+                result = await backend.session.read_resource(uri)
+                return [
+                    ReadResourceContents(content=item.text, mime_type=item.mimeType)
+                    for item in result.contents
+                ]
             if str(uri) != CONTEXT_URI:
                 raise ValueError(f"Unknown workspace resource: {uri}")
             backend = await self.ensure_connection()

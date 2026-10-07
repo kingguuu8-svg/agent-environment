@@ -26,7 +26,13 @@ from starlette.applications import Starlette
 from starlette.routing import Route
 
 ROOT = Path(__file__).resolve().parent
-BUNDLE_FILES = ("worker.mjs", "package.json", "package-lock.json", "pi-tools.json")
+BUNDLE_FILES = (
+    "worker.mjs",
+    "workspace-files.mjs",
+    "package.json",
+    "package-lock.json",
+    "pi-tools.json",
+)
 LOG = logging.getLogger("remote-mcp-demo")
 
 

@@ -48,6 +48,7 @@ def install_bundle(request: dict, base: Path, node: str, npm: str) -> dict:
     files = request["files"]
     if set(files) != {
         "worker.mjs",
+        "workspace-files.mjs",
         "package.json",
         "package-lock.json",
         "pi-tools.json",
