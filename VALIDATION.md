@@ -12,6 +12,7 @@
 | 模型请求、环境选择、接力与连接状态 | `verify_dsh_context.py`，独立 Host、loopback SSH、实际 HTTP 录制端点 | 18 项通过 |
 | 输入权持久恢复与分支独立 | `verify_dsh_ownership.py`，独立原生 Host、本地 SSE 模型、两次停启 | 7 项通过 |
 | 客户端发送失败与返回结果 | `verify_dsh_client.mjs`，实际客户端拦截器、loopback HTTP 服务 | 4 项通过 |
+| 启动等待、取消与登录恢复 | `verify_dsh_launcher.py`，独立 Host、loopback SSH、真实 Linux 用户服务 | 16 项通过 |
 | 既有 Pi MCP 工具行为 | `verify_local.py`，独立 loopback sshd | 23 项通过 |
 | 既有远端工作区入口 | `verify_workspace_local.py`，两个并行目录与 HTTP MCP | 11 项通过 |
 
@@ -51,6 +52,7 @@ dsh web --remote --no-open
 .venv/bin/python verify_dsh_context.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
 .venv/bin/python verify_dsh_ownership.py --node /home/kingguuu8/.local/node/bin/node
 /home/kingguuu8/.local/node/bin/node verify_dsh_client.mjs
+.venv/bin/python verify_dsh_launcher.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
 ```
 
 恢复脚本会暂时停止设备连接和重启 Host，应在空闲时运行。私有启动信息与完整验证记录位于忽略目录中。该版本验证了个人 Linux 环境；其他操作系统、多人权限隔离、远端扩展与持久交互式终端尚未覆盖。安装和维护方式见 [云端 DSH](DSH_REMOTE.md)。
@@ -94,6 +96,20 @@ dsh web --remote --no-open
 随后在 VPS4 上创建独立 Host，验证 36 个控制者从旧版投影缓存升级后恢复，先到达的查看者仍只读。该 Host 通过实际 VPS1 工具连接完成无效目录拒绝、接管并切换、原控制者拒绝、原生重命名与文件浏览、重复旧确认拒绝；再次冷启动后新控制者和 VPS1 绑定一起恢复。测试使用独立状态目录，结束后清理临时进程与文件，日常服务 PID 保持。
 
 本轮证据位于忽略目录中的 `.local/verification-dsh-context.json`、`.local/verification-dsh-ownership.json`、`.local/verification-dsh-handoff-ui.json`、`.local/verification-dsh-handoff-deployed.json` 与 `.local/verification-dsh-handoff-live.json`。日常页面只读检查保留原会话与执行目标。
+
+## Web 启动反馈
+
+2026 年 10 月 8 日，用独立后台连接复现云端不可达时终端无反馈的问题：命令等待七秒仍运行，stdout 与 stderr 均为空。旧版最多等待五分钟。现版启动时显示进度，每 10 秒更新，默认后台入口约 45 秒后结束等待并提供诊断与重试方法；后台连接继续保持。
+
+`verify_dsh_launcher.py` 的 16 项检查使用真实 loopback SSH、独立 DSH Host 和 Linux 用户服务。直接用户服务与原生 supervisor 两种入口均验证冷启动、重复使用时的 PID 与目录提示、10 秒等待反馈、Ctrl+C 退出码 130，以及取消后复用同一连接。暂停独立 Host 使真实 HTTP 请求无法完成，确认后台入口在 45 秒附近以退出码 1 结束，显示日志位置；恢复 Host 后同一 PID 可重新进入。两次实际 Host 重启后，入口自动更新登录信息。
+
+实际前台连接复现了入口缓存冲突：使用相同配置启动前台时，后台缓存被替换，退出又将它删除。现版让持久服务维护共享缓存，普通前台入口只返回自己的登录链接。两种后台方式均验证前台期间与退出后缓存保持原值，原连接继续可用；分别移除缓存与写入不匹配的进程身份后，入口刷新一次服务并完成登录，会话仍为空。
+
+前台取消后，独立 SSH 转发端口关闭，Host 仍运行；错误 SSH 密钥被实际服务拒绝，未产生登录入口；未知机器由云端入口返回原因，客户端正常退出。所有检查结束后，会话列表仍为空，模型调用为零，测试用户服务、缓存、进程与目录均已清理。结果保存在 `.local/verification-dsh-launcher.json`，原问题证据位于 `.local/verification-dsh-launcher-before.json`。该轮验证覆盖 Linux 的两种连接方式，macOS 与 Windows 原生后台任务仍未覆盖。
+
+发布时备份并更新 VPS4 与 VPS1 的三份客户端模块，以及 VPS4 的设备安装包；运行源码哈希与本地一致，安装包包含同一启动器。VPS1 的旧部署补齐此前缺失的 `state-json.mjs` 依赖。全程保持 Host PID；35 个原会话的目录、标题、统计、绑定、控制记录与预设保持原值。
+
+本机实际命令连续两次通过原后台 PID 登录，目录提示正确；VPS1 已安装命令通过真实 SSH 登录、指向原项目，Ctrl+C 以 130 退出并关闭自身转发端口，会话数量保持 35；VPS4 直接入口也完成登录与目录检查。记录位于 `.local/dsh-launcher-deployment.json`、`.local/verification-dsh-launcher-desktop.json`、`.local/verification-dsh-launcher-vps1.json` 与 `.local/verification-dsh-launcher-vps4.json`。源文件备份位于各 VPS 运行时的 `launcher-backups`，回滚时恢复同一份备份中的客户端文件即可，云端会话服务保持运行。
 
 ## 设备安装
 
