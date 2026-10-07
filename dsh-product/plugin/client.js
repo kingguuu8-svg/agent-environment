@@ -290,6 +290,10 @@ window.__ModuleLoader__.load({
           } catch (failure) { if (ticket === generation.current && !abort.signal.aborted) setError(failure.message); }
           finally { if (ticket === generation.current) setLoading(false); }
         };
+        const startingDirectory = (selected) => lastPaths.current.get(selected.id)
+          ?? (initial?.machine === selected.id ? initial.workspace : null)
+          ?? (originMachine === selected.id ? originWorkspace : null)
+          ?? selected.workspace;
         const loadCatalog = () => {
           catalogRequest.current?.abort();
           const controller = new AbortController();
@@ -301,7 +305,7 @@ window.__ModuleLoader__.load({
             const chosen = value.machines.find((item) => item.id === machine) ?? value.machines[0];
             if (!chosen) throw new Error("还没有可用机器，请先接入设备。");
             setMachine(chosen.id);
-            scan(chosen.id, chosen.id === machine ? path || chosen.workspace : chosen.workspace);
+            scan(chosen.id, chosen.id === machine ? path || startingDirectory(chosen) : startingDirectory(chosen));
           }).catch((failure) => { if (!controller.signal.aborted) { setError(failure.message); setLoading(false); } });
         };
         useEffect(() => {
@@ -327,6 +331,8 @@ window.__ModuleLoader__.load({
         const parent = (listing?.absolutePath.replaceAll("\\", "/").replace(/\/+$/, "").replace(/\/[^/]*$/, "") || "/").replace(/^([A-Za-z]:)$/, "$1/");
         const saved = new Map((catalog?.savedWorkspaces ?? []).filter((item) => item.machine === machine).map((item) => [item.workspace, item]));
         if (initial?.machine === machine && !saved.has(initial.workspace)) saved.set(initial.workspace, initial);
+        const entryDirectory = switching && machine === originMachine && originWorkspace && (initial?.machine !== machine || initial.workspace !== originWorkspace) ? originWorkspace : null;
+        if (entryDirectory) saved.delete(entryDirectory);
         const directories = (listing?.entries ?? []).filter((item) => item.type === "directory" && (hidden || !item.name.startsWith(".")));
         const visibleDirectories = directories.filter((item) => item.name.toLocaleLowerCase().includes(filter.toLocaleLowerCase()));
         const toolLabels = { read: "读取", write: "写入", edit: "精确编辑", bash: "运行命令", grep: "搜索内容", find: "查找文件", ls: "列目录" };
@@ -355,9 +361,12 @@ window.__ModuleLoader__.load({
           h("div", { className: "rw-machines", role: "group", "aria-label": "选择机器" }, machines.map((item) => h("button", {
             key: item.id, type: "button", className: "rw-machine", disabled: busy, "aria-pressed": machine === item.id,
             "aria-label": item.label + (item.hostname ? " · " + item.hostname : ""),
-            onClick: () => { setMachine(item.id); scan(item.id, lastPaths.current.get(item.id) ?? (initial?.machine === item.id ? initial.workspace : item.workspace)); },
+            onClick: () => { setMachine(item.id); scan(item.id, startingDirectory(item)); },
           }, h("span", { className: "rw-machine-heading" }, icon(item.id === "cloud" ? "cloud" : "machine"), item.label),
             h("span", { className: "rw-machine-host", title: item.hostname ?? item.id }, item.hostname ?? item.id)))),
+          entryDirectory ? h(React.Fragment, null, h("span", { className: "rw-section-label" }, "本次终端目录"), h("div", { className: "rw-shortcuts", "aria-label": "本次终端目录" },
+            h("button", { type: "button", className: "rw-shortcut", title: entryDirectory, disabled: busy || loading, "aria-pressed": listing?.absolutePath === entryDirectory,
+              "aria-label": "选择本次终端目录", onClick: () => scan(machine, entryDirectory) }, entryDirectory.replaceAll("\\", "/").split("/").filter(Boolean).at(-1) || "/"))) : null,
           saved.size ? h(React.Fragment, null, h("span", { className: "rw-section-label" }, "已有工作区"), h("div", { className: "rw-shortcuts", "aria-label": "已有工作区" },
             [...saved.values()].map((item) => h("button", { key: item.workspace, type: "button", className: "rw-shortcut", title: item.workspace, disabled: busy, "aria-pressed": listing?.absolutePath === item.workspace,
               onClick: () => scan(machine, item.workspace) }, item.workspace.split("/").filter(Boolean).at(-1) || "/")))) : null,
@@ -377,6 +386,8 @@ window.__ModuleLoader__.load({
             h("div", { className: "rw-empty" }, filter ? "没有匹配的子目录，试试其他名称。" : "此目录下没有可显示的子目录。仍可使用当前目录。")),
           error ? h("div", { className: "rw-connection-warning", role: "alert" }, h("span", null, connection?.status === "cloud-offline" ? "恢复云端连接后，机器和目录会重新载入。" : !catalog ? "暂时无法读取机器列表，可以在此重试。" : "目录读取或选择失败。可以修改路径，或重新尝试。"),
             h("button", { className: "rw-button", type: "button", style: { marginLeft: "8px" }, disabled: busy || loading, onClick: () => catalog ? scan(machine, path) : loadCatalog() }, "重试"),
+            chosenMachine?.workspace && path !== chosenMachine.workspace ? h("button", { className: "rw-button", type: "button", style: { marginLeft: "8px" }, title: chosenMachine.workspace, disabled: busy || loading,
+              onClick: () => scan(machine, chosenMachine.workspace) }, "打开设备默认目录") : null,
             h("details", { className: "rw-details" }, h("summary", null, "查看原因"), h("div", { className: "rw-error" }, error))) : null,
           h("details", { className: "rw-details" }, h("summary", null, "Agent 能访问什么"),
             h("p", null, "默认文件与命令工具使用所选工作区。Agent 也能指定访问其他已接入机器和云端目录。"),

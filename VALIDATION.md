@@ -111,6 +111,20 @@ dsh web --remote --no-open
 
 本机实际命令连续两次通过原后台 PID 登录，目录提示正确；VPS1 已安装命令通过真实 SSH 登录、指向原项目，Ctrl+C 以 130 退出并关闭自身转发端口，会话数量保持 35；VPS4 直接入口也完成登录与目录检查。记录位于 `.local/dsh-launcher-deployment.json`、`.local/verification-dsh-launcher-desktop.json`、`.local/verification-dsh-launcher-vps1.json` 与 `.local/verification-dsh-launcher-vps4.json`。源文件备份位于各 VPS 运行时的 `launcher-backups`，回滚时恢复同一份备份中的客户端文件即可，云端会话服务保持运行。
 
+随后复核发现，增量发布辅助脚本读取原生投影时遗漏了 `projections.values` 层，原检查中的标题、统计、控制记录与预设因此为空值。辅助脚本已改为直接索引实际字段，并依据发布前保存的完整快照重新审计全部 35 个会话。五项实际投影逐个相同；补充结果位于 `.local/verification-dsh-launcher-projection-audit.json`。先前的空值比较不能作为这些字段的保留证据，会话保留结论依据本次重新审计。
+
+## Web 终端目录接续
+
+2026 年 10 月 8 日，隔离浏览器复现：从 B 的终端项目进入，新建面板使用正确目录；打开 A 的会话后在工作环境面板选 B，却使用设备登记的默认目录。实际移走终端目录后，主目录和上一级均不可用，也缺少直接回到已知默认目录的操作。
+
+本轮只修改客户端目录面板。起始目录依次使用面板内已浏览目录、当前会话在该机器的目录、本次终端入口目录、设备默认目录。切换面板保留终端目录快捷入口；目录错误时，可明确打开不同的设备默认目录。浏览过程保持绑定与控制关系。
+
+13 项浏览器观察覆盖入口预选、打开其他设备历史、机器切换、明确目录记忆、目录实际移走与恢复、接管并切换、历史保留、当前会话目录优先，以及没有入口提示时的默认行为。在真实 loopback SSH 与独立原生 Host 中，B 接力后的第二次模型 HTTP 请求包含终端目录和 `TERMINAL-B-MARKER`，当前系统上下文排除 A 与登记默认目录的项目指令，上一轮 `A-HISTORY-MARKER` 仍在历史。原生文件读取返回同一终端项目指令；原控制者为只读。明确切到 B 的另一目录后，重开面板及 A→B 浏览仍保留该目录；点终端快捷入口并取消，后端绑定保持。
+
+模拟模型共收到两次请求。隔离 Host、模型、SSH、代理端口、临时目录和浏览器页已清理，用户页面保持。证据位于 `.local/verification-dsh-entry-path-before.json`、`.local/verification-dsh-entry-path-ui.json` 与 `.local/verification-dsh-entry-path-model.json`。客户端 4 项 HTTP 异常回归、JavaScript 语法、Python lint 与格式检查通过。该轮在 Linux 浏览器与 SSH 环境中验证；macOS 和 Windows 原生入口仍待真机检查。
+
+会话空闲且没有待切换目标时，VPS4 备份并仅替换 `dsh-product/plugin/client.js`，重启 Host 后刷新本机入口。运行文件哈希与已验证源码一致；35 个会话的五项实际投影及当前绑定、7 个原生工作区分组、机器目录与六份配置文件保持原值。26 个已有控制者恢复，随机查看者仍只读；云端、当前电脑和 VPS1 的原生文件浏览与实际工具探测通过。原页面刷新后保留会话、执行位置与查看权限，当前目标已连接。部署证据位于 `.local/verification-dsh-entry-path-deployed.json`，原界面备份留在 VPS4 的 `dsh-state/backups/terminal-entry-*` 中；回滚时恢复同一备份的 `client.js` 并重启 Host。
+
 ## 设备安装
 
 2026 年 10 月 7 日，Web 已提供 Linux、macOS 和 Windows 安装包选择。设备通过出站 SSH 连接到 VPS4，本机使用 Python 工具桥接进程运行原生 Pi 工具。Linux 安装在 VPS1 的全新普通用户上验证；macOS 与 Windows 为预览版，尚未完成对应系统的真机安装验证。
