@@ -38,6 +38,8 @@ export class RemoteWorkspaces extends TypertRemoteService {
     this.leases = new Map();
     this.authorized = new AsyncLocalStorage();
     this.operations = new Map();
+    this.connectionChecks = new Map();
+    this.checkingConnections = new Map();
     ctx.effect(() => () => this.environment.close(), "remote: transports");
     ctx.sessionProjections.register({
       key: "remoteBinding", stateVersion: 1, stateSchema: projectionSchema,
@@ -156,6 +158,7 @@ export class RemoteWorkspaces extends TypertRemoteService {
     const state = this.state(agent.session);
     return { ...state, current: state.current ? { ...state.current, hostname: this.binding(state.current.id).hostname } : null,
       pending: state.pending ? { ...state.pending, hostname: this.binding(state.pending.id).hostname } : null,
+      connection: state.current ? this.connectionState(state.current.id) : null,
       running: agent.status === "running", control: lease ? { mine: lease.clientId === clientId, label: lease.label, epoch: lease.clientId === clientId ? lease.epoch : null } : null };
   }
   requireControl(agent, request) {
@@ -180,7 +183,53 @@ export class RemoteWorkspaces extends TypertRemoteService {
     checkRequest(request);
     this.reloadTargets();
     const machines = [{ id: "cloud", label: "VPS4 · 云端", workspace: this.environment.get("cloud").workspace }, ...Object.entries(this.environment.configuration.targets ?? {}).map(([id, target]) => ({ id, label: target.label ?? id, workspace: target.workspace }))];
-    return { machines, workspaces: this.environment.list() };
+    for (const machine of machines) {
+      machine.hostname = machine.id === "cloud" ? hostname() : [...this.environment.entries.values()].find((entry) => entry.machine === machine.id && entry.context?.hostname)?.context.hostname;
+    }
+    const savedWorkspaces = this.host.workspaceRegistry.list().flatMap((workspace) => {
+      const binding = this.anchors[workspace.path] ?? (workspace.path === this.environment.get("cloud").workspace ? this.binding("cloud") : null);
+      return binding && machines.some((machine) => machine.id === binding.machine) ? [{ ...this.binding(binding.id), title: workspace.title, workspaceId: workspace.id }] : [];
+    });
+    const services = Object.keys(this.environment.configuration.mcp ?? {}).map((id) => ({ id, tools: this.environment.descriptors(id).map((tool) => tool.name) }));
+    return { machines, savedWorkspaces, services, tools: this.environment.manifest.map((tool) => tool.name), workspaces: this.environment.list() };
+  }
+  connectionState(id) {
+    const checked = this.connectionChecks.get(id);
+    if (this.checkingConnections.has(id)) return { ...checked, status: "checking" };
+    const error = this.environment.get(id).lastError;
+    if (error) return { ...checked, status: "unavailable", error };
+    return checked && Date.now() - checked.checkedAt < 65000 ? checked : { status: "unknown" };
+  }
+  async probe(request) {
+    checkRequest(request);
+    const id = request.target;
+    if (typeof id !== "string" || !["local", "ssh"].includes(this.environment.get(id).kind)) fail("Select a machine workspace to check its connection");
+    if (this.checkingConnections.has(id)) return this.checkingConnections.get(id);
+    const check = (async () => {
+      const started = Date.now();
+      const controller = new AbortController();
+      let timer;
+      try {
+        // Check the real directory without executing a model turn, changing a
+        // binding, or closing a connection shared by another session.
+        await Promise.race([
+          this.fileRequest(id, { op: "stat", path: "." }, controller.signal),
+          new Promise((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error("连接检查超时，请稍后重试。")); }, 12000); }),
+        ]);
+        const entry = this.environment.get(id);
+        if (entry.lastError) { delete entry.lastError; this.environment.save(); }
+        const result = { status: "online", checkedAt: Date.now(), latencyMs: Date.now() - started };
+        this.connectionChecks.set(id, result);
+        return result;
+      } catch (error) {
+        const result = { status: "unavailable", checkedAt: Date.now(), error: errorMessage(error) };
+        this.connectionChecks.set(id, result);
+        return result;
+      } finally { clearTimeout(timer); }
+    })();
+    this.checkingConnections.set(id, check);
+    try { return await check; }
+    finally { if (this.checkingConnections.get(id) === check) this.checkingConnections.delete(id); }
   }
   async browse(request, signal) {
     checkRequest(request);
@@ -372,7 +421,7 @@ export class RemoteWorkspaces extends TypertRemoteService {
 }
 
 // Native JS decorators keep this plugin on DSH's authenticated Typert RPC carrier.
-for (const method of ["catalog", "browse", "pick", "get", "control", "switch", "discardSwitch", "input"]) {
+for (const method of ["catalog", "browse", "pick", "get", "probe", "control", "switch", "discardSwitch", "input"]) {
   Remote(RemoteWorkspaces.prototype[method], { kind: "method", name: method, private: false, static: false, addInitializer: (initializer) => invocationInitializers.push(initializer) });
 }
 
