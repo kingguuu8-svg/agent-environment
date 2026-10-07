@@ -7,6 +7,16 @@ window.__ModuleLoader__.load({
     const { useState, useEffect, useRef, useSyncExternalStore } = React;
     const inject = ["connection", "sessions", "workspaces", "slots", "uiWorkspace", "layout", "sidebarRight"];
 
+    class CloudConnectionError extends Error {
+      constructor(cause) {
+        const loginExpired = /HTTP (401|403)\b/.test(cause.message ?? "");
+        super(loginExpired ?
+          "云端登录已失效，请重新运行 dsh web --remote 打开入口。" :
+          "暂时无法连接云端，请检查网络后重试。", { cause });
+        this.loginExpired = loginExpired;
+      }
+    }
+
     function apply(ctx) {
       const clientId = (() => {
         // Keep this tab's controller on reload or plugin reload. A fresh tab gets a fresh identity,
@@ -44,7 +54,14 @@ window.__ModuleLoader__.load({
       const openCreate = () => { if (creatingSession) return; createOpen = true; creation = { busy: false, error: "", workspaceId: null }; notifyCreation(); };
       const closeCreate = () => { createOpen = false; notifyCreation(); };
       const api = async (method, request, signal) => {
-        const result = await originalCall("/api", `remoteWorkspaces/${method}`, { args: { request } }, signal);
+        let result;
+        try { result = await originalCall("/api", `remoteWorkspaces/${method}`, { args: { request } }, signal); }
+        catch (error) {
+          if (signal?.aborted || error.name === "AbortError") throw error;
+          // Business failures arrive as RPC results. Only a transport failure
+          // means the page cannot confirm the cloud's state or a submitted turn.
+          throw new CloudConnectionError(error);
+        }
         if (!result.ok) throw new Error(result.error.message);
         return result.value;
       };
@@ -86,7 +103,11 @@ window.__ModuleLoader__.load({
             if (!value.current) return originalCall(channel, endpoint, payload, signal);
             const result = await controlled("input", { sessionId: request.sessionId, method: endpoint.split("/")[1], payload: request }, signal);
             return { ok: true, value: result };
-          } catch (error) { return { ok: false, error: { code: "gateway/bad-request", message: error.message, details: {} } }; }
+          } catch (error) {
+            const message = error instanceof CloudConnectionError && endpoint === "session/prompt" ?
+              error.message + " 发送结果尚未确认，草稿已保留。恢复后请先检查会话，再决定是否发送。" : error.message;
+            return { ok: false, error: { code: "gateway/bad-request", message, details: {} } };
+          }
         }
         return originalCall(channel, endpoint, payload, signal);
       };
@@ -118,7 +139,7 @@ window.__ModuleLoader__.load({
         .rw-icon{width:16px;height:16px;flex:none;display:inline-block}.rw-section-label{font-size:12px;color:var(--dsw-alias-label-secondary,#999);margin:14px 0 8px;display:block}
         .rw-machines{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.rw-machine{border:1px solid var(--dsw-alias-border-l4,#80808050);border-radius:10px;color:inherit;background:transparent;cursor:pointer;padding:12px;text-align:left;min-width:0}.rw-machine[aria-pressed=true]{background:#356be810;border-color:#648cdb}.rw-machine-heading{display:flex;align-items:center;gap:7px;font:inherit;font-size:13px;font-weight:500}.rw-machine-host{font-size:11px;color:var(--dsw-alias-label-secondary,#999);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:5px}.rw-machine:disabled{opacity:.6;cursor:default}
         .rw-shortcuts{display:flex;gap:6px;flex-wrap:wrap;max-height:90px;overflow:auto;margin-bottom:14px}.rw-shortcut{padding:6px 9px;border:1px solid var(--dsw-alias-border-l4,#80808050);border-radius:7px;color:inherit;background:transparent;cursor:pointer;font-size:12px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.rw-shortcut[aria-pressed=true]{border-color:#648cdb;background:#356be810}
-        .rw-selection{background:var(--dsw-alias-interactive-bg-hover,#80808012);border-radius:10px;padding:12px;margin:12px 0 0}.rw-selection-top{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px;margin-bottom:5px}.rw-full-path{font-size:12px;line-height:1.6;overflow-wrap:anywhere;display:block;color:var(--dsw-alias-label-secondary,#aaa)}.rw-dot{width:7px;height:7px;border-radius:50%;background:#979a9e;display:inline-block;flex:none}.rw-dot[data-status=online]{background:#65b88a}.rw-dot[data-status=unavailable]{background:#d47b6e}.rw-dot[data-status=checking]{background:#d7ad65}
+        .rw-selection{background:var(--dsw-alias-interactive-bg-hover,#80808012);border-radius:10px;padding:12px;margin:12px 0 0}.rw-selection-top{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px;margin-bottom:5px}.rw-full-path{font-size:12px;line-height:1.6;overflow-wrap:anywhere;display:block;color:var(--dsw-alias-label-secondary,#aaa)}.rw-dot{width:7px;height:7px;border-radius:50%;background:#979a9e;display:inline-block;flex:none}.rw-dot[data-status=online]{background:#65b88a}.rw-dot[data-status=unavailable],.rw-dot[data-status=cloud-offline]{background:#d47b6e}.rw-dot[data-status=checking]{background:#d7ad65}
         .rw-target{max-width:300px;border-radius:8px;padding:6px 9px;gap:7px;background:var(--dsw-alias-interactive-bg-hover,#80808012)}.rw-target-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.rw-target-status{font-size:11px;color:var(--dsw-alias-label-secondary,#999);white-space:nowrap}.rw-control{font-size:11px;color:var(--dsw-alias-label-secondary,#999);white-space:nowrap}.rw-connection-warning{border:1px solid #c68c2140;background:#c68c2108;border-radius:10px;padding:12px;margin-bottom:14px;line-height:1.6;font-size:13px}.rw-details{font-size:12px;color:var(--dsw-alias-label-secondary,#999);margin-top:14px;line-height:1.7}.rw-details summary{cursor:pointer}.rw-details p{margin:8px 0}.rw-tools{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}.rw-tool{border:1px solid var(--dsw-alias-border-l4,#80808040);border-radius:5px;padding:2px 7px;font-size:11px}
         @media(max-width:640px){.rw-dialog{padding:18px!important}.rw-machines{grid-template-columns:repeat(2,minmax(0,1fr))}.rw-footer{align-items:stretch;flex-direction:column}.rw-footer-actions{justify-content:flex-end}.rw-folders{height:120px}.rw-target{max-width:235px}.rw-target-status,.rw-control{display:none}.rw-row{flex-wrap:wrap}}
       `;
@@ -248,6 +269,7 @@ window.__ModuleLoader__.load({
         const [filter, setFilter] = useState("");
         const [setupOpen, setSetupOpen] = useState(false);
         const lifetime = useRef();
+        const catalogRequest = useRef();
         const generation = useRef(0);
         const committing = useRef(false);
         const lastPaths = useRef(new Map());
@@ -268,8 +290,11 @@ window.__ModuleLoader__.load({
           } catch (failure) { if (ticket === generation.current && !abort.signal.aborted) setError(failure.message); }
           finally { if (ticket === generation.current) setLoading(false); }
         };
-        useEffect(() => {
+        const loadCatalog = () => {
+          catalogRequest.current?.abort();
           const controller = new AbortController();
+          catalogRequest.current = controller;
+          setLoading(true); setError("");
           api("catalog", {}, controller.signal).then((value) => {
             if (controller.signal.aborted) return;
             setCatalog(value);
@@ -278,9 +303,13 @@ window.__ModuleLoader__.load({
             setMachine(chosen.id);
             scan(chosen.id, chosen.id === machine ? path || chosen.workspace : chosen.workspace);
           }).catch((failure) => { if (!controller.signal.aborted) { setError(failure.message); setLoading(false); } });
-          return () => { controller.abort(); lifetime.current?.abort(); generation.current++; };
+        };
+        useEffect(() => {
+          loadCatalog();
+          return () => { catalogRequest.current?.abort(); lifetime.current?.abort(); generation.current++; };
         }, []);
         useEffect(() => {
+          if (connection && connection.status !== "cloud-offline" && !catalog && !loading && error) { loadCatalog(); return; }
           if (connection?.status === "online" && catalog && !listing && !loading && error && machine === initial?.machine && path === initial?.workspace) scan(machine, path);
         }, [connection?.status]);
         const changedPath = listing && path !== listing.absolutePath;
@@ -311,6 +340,10 @@ window.__ModuleLoader__.load({
           h("div", { className: "rw-dialog-heading" }, h("h2", null, title), h("button", { type: "button", className: "rw-button", disabled: busy, "aria-label": "关闭", "data-modal-autofocus": true, onClick: cancel }, "×")),
           h("p", { className: "rw-description" }, switching ? "切换工具的执行位置，同一会话继续使用原有历史。" : "选一个工作区开始。Agent 和会话记录保存在 VPS4。"),
           h("div", { className: "rw-dialog-body" },
+          connection?.status === "cloud-offline" ? h("div", { className: "rw-connection-warning", role: "status" },
+            h("strong", null, connection.loginExpired ? "云端登录已失效" : "页面与云端的连接已中断"),
+            h("div", { className: "rw-meta" }, connection.loginExpired ? connection.error : "正在自动重连。恢复连接后才能检查机器和切换工作区。"),
+            onProbe && !connection.loginExpired ? h("button", { className: "rw-button", type: "button", disabled: busy, onClick: onProbe }, "重连云端") : null) :
           connection?.status === "unavailable" ? h("div", { className: "rw-connection-warning", role: "status" },
             h("strong", null, "当前会话的工作区暂时无法连接"),
             h("div", { className: "rw-meta" }, "可以重新检查，或选择其他机器。会话记录仍在云端。"),
@@ -340,8 +373,8 @@ window.__ModuleLoader__.load({
             visibleDirectories.length ? visibleDirectories.map((item) => h("button", { key: item.name, className: "rw-folder", type: "button", disabled: busy, onClick: () => scan(machine, listing.absolutePath.replace(/\/$/, "") + "/" + item.name) },
               icon("folder"), h("span", null, item.name), h("span", { className: "rw-chevron" }, icon("chevron")))) :
             h("div", { className: "rw-empty" }, filter ? "没有匹配的子目录，试试其他名称。" : "此目录下没有可显示的子目录。仍可使用当前目录。")),
-          error ? h("div", { className: "rw-connection-warning", role: "alert" }, h("span", null, "目录读取或选择失败。可以修改路径，或重新尝试。"),
-            h("button", { className: "rw-button", type: "button", style: { marginLeft: "8px" }, disabled: busy, onClick: () => catalog ? scan(machine, path) : onCancel() }, catalog ? "重试" : "关闭后重试"),
+          error ? h("div", { className: "rw-connection-warning", role: "alert" }, h("span", null, connection?.status === "cloud-offline" ? "恢复云端连接后，机器和目录会重新载入。" : !catalog ? "暂时无法读取机器列表，可以在此重试。" : "目录读取或选择失败。可以修改路径，或重新尝试。"),
+            h("button", { className: "rw-button", type: "button", style: { marginLeft: "8px" }, disabled: busy || loading, onClick: () => catalog ? scan(machine, path) : loadCatalog() }, "重试"),
             h("details", { className: "rw-details" }, h("summary", null, "查看原因"), h("div", { className: "rw-error" }, error))) : null,
           h("details", { className: "rw-details" }, h("summary", null, "Agent 能访问什么"),
             h("p", null, "默认文件与命令工具使用所选工作区。Agent 也能指定访问其他已接入机器和云端目录。"),
@@ -392,7 +425,7 @@ window.__ModuleLoader__.load({
         const binding = useProjection("remoteBinding");
         const [snapshot, setSnapshot] = useState(null);
         const [choosing, setChoosing] = useState(false);
-        const [error, setError] = useState("");
+        const [error, setError] = useState(null);
         const [probing, setProbing] = useState(null);
         const previousTarget = useRef();
         const activeSession = useRef(sessionId);
@@ -411,7 +444,7 @@ window.__ModuleLoader__.load({
           });
         };
         useEffect(() => {
-          setChoosing(false); setError("");
+          setChoosing(false); setError(null);
           if (!sessionId) return;
           let disposed = false, refreshing = false, timer;
           const abort = new AbortController();
@@ -421,8 +454,8 @@ window.__ModuleLoader__.load({
             try {
               let value = await api("get", { sessionId, clientId }, abort.signal);
               if (!value.control && !disposed) value = await control(sessionId);
-              if (!disposed) { setView(value); setError(""); }
-            } catch (failure) { if (!disposed) setError(failure.message); }
+              if (!disposed) { setView(value); setError(null); }
+            } catch (failure) { if (!disposed) setError(failure); }
             finally { refreshing = false; }
           };
           const poll = async () => {
@@ -446,8 +479,8 @@ window.__ModuleLoader__.load({
             try {
               await api("probe", { target }, abort.signal);
               const value = await api("get", { sessionId, clientId }, abort.signal);
-              if (!disposed) { setView(value); setError(""); }
-            } catch (failure) { if (!disposed) setError(failure.message); }
+              if (!disposed) { setView(value); setError(null); }
+            } catch (failure) { if (!disposed) setError(failure); }
             finally { checking = false; if (!disposed) setProbing(null); }
           };
           probeNow.current = check;
@@ -475,22 +508,23 @@ window.__ModuleLoader__.load({
         const mine = state?.control?.mine;
         const pending = effective.pending;
         const connection = state?.current?.id === current.id ? state.connection : null;
-        const availability = error ? "unavailable" : probing === current.id ? "checking" : connection?.status ?? "unknown";
-        const statusLabel = { online: "已连接", unavailable: "连接异常", checking: "检查中", unknown: "待检查" }[availability];
+        const cloudUnavailable = error instanceof CloudConnectionError;
+        const availability = cloudUnavailable ? "cloud-offline" : probing === current.id ? "checking" : connection?.status ?? "unknown";
+        const statusLabel = { online: "已连接", unavailable: "工作区不可用", checking: "检查中", unknown: "待检查", "cloud-offline": error?.loginExpired ? "登录已失效" : "云端断线" }[availability];
         return h("div", { className: "rw-bar", "data-remote-machine": current.machine, "data-remote-workspace": current.workspace },
           h("button", { type: "button", className: "rw-button rw-target", "aria-label": "工作环境：" + shortTarget(current), title: current.workspace + "\n点击查看机器、目录和连接，或切换工作区。", onClick: () => setChoosing(true) },
             h("span", { className: "rw-dot", "data-status": availability }), h("span", { className: "rw-target-label" }, shortTarget(current)), h("span", { className: "rw-target-status" }, statusLabel), h("span", { "aria-hidden": true }, "⌄")),
-          mine ? h("span", { className: "rw-control", title: "会话记录保存在 VPS4，此窗口可以提交输入。" }, "云端记录 · 可输入") :
-            h("button", { type: "button", className: "rw-button", onClick: async () => {
-              try { setView(await control(sessionId, true)); setError(""); showNotice("已接管输入，可以继续这条会话。"); } catch (failure) { setError(failure.message); }
+          mine ? h("span", { className: "rw-control", title: cloudUnavailable ? "未发送内容保留在当前浏览器。连接恢复后先检查会话，再决定是否发送。" : "会话记录保存在 VPS4，此窗口可以提交输入。" }, cloudUnavailable ? "草稿保留 · 等待重连" : "云端记录 · 可输入") :
+            h("button", { type: "button", className: "rw-button", disabled: cloudUnavailable, onClick: async () => {
+              try { setView(await control(sessionId, true)); setError(null); showNotice("已接管输入，可以继续这条会话。"); } catch (failure) { setError(failure); }
             } }, "接管输入"),
           !mine && state?.control ? h("span", { className: "rw-meta", style: { maxWidth: "180px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: state.control.label }, "查看模式 · " + state.control.label) : null,
           pending ? h("span", { className: "rw-pending", title: pending.workspace }, "当前任务结束后切换至 " + shortTarget(pending), mine ? h("button", { type: "button", className: "rw-button", onClick: async () => {
-            try { setView(await controlled("discardSwitch", { sessionId })); showNotice("已撤回待切换工作区。"); } catch (failure) { setError(failure.message); }
+            try { setView(await controlled("discardSwitch", { sessionId })); showNotice("已撤回待切换工作区。"); } catch (failure) { setError(failure); }
           } }, "撤回") : null) : null,
-          availability === "unavailable" ? h("button", { className: "rw-button", type: "button", onClick: () => { refreshNow.current(); probeNow.current(); } }, "重试连接") : null,
-          error ? h("span", { role: "alert", className: "rw-error", title: error }, "云端连接暂时不可用，请重试。") : null,
-          choosing ? h(DirectoryDialog, { title: "工作环境", initial: current, switching: true, canChoose: !!mine, actionLabel: "切换到此工作区", connection: { ...connection, status: availability, ...(error ? { error } : {}) }, onProbe: () => probeNow.current(), onCancel: () => setChoosing(false), onChoose: async (chosen) => {
+          ["unavailable", "cloud-offline"].includes(availability) && !error?.loginExpired ? h("button", { className: "rw-button", type: "button", onClick: () => { refreshNow.current(); probeNow.current(); } }, cloudUnavailable ? "重连云端" : "重新检查工作区") : null,
+          error ? h("span", { role: "alert", className: "rw-error", title: error.cause?.message ?? error.message }, cloudUnavailable && !error.loginExpired ? "正在自动重连，未发送内容保留在当前浏览器。" : error.message) : null,
+          choosing ? h(DirectoryDialog, { title: "工作环境", initial: current, switching: true, canChoose: !!mine, actionLabel: "切换到此工作区", connection: { ...connection, status: availability, ...(error ? { error: error.message, loginExpired: !!error.loginExpired } : {}) }, onProbe: () => probeNow.current(), onCancel: () => setChoosing(false), onChoose: async (chosen) => {
             const value = await controlled("switch", { sessionId, revision: effective.revision, ...chosen });
             setView(value); setChoosing(false);
             if (value.pending) showNotice("已安排切换。当前任务继续在原工作区执行，结束后切换至 " + shortTarget(value.pending) + "。");

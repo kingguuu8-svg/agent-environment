@@ -11,6 +11,7 @@
 | 新 HTTP MCP 的发现与调用 | `verify_dsh_mcp.py`，独立 DSH Host、真实模型、临时 HTTP MCP 服务 | 2 项通过 |
 | 模型请求、环境选择与连接状态 | `verify_dsh_context.py`，独立 Host、loopback SSH、实际 HTTP 录制端点 | 12 项通过 |
 | 输入权持久恢复与分支独立 | `verify_dsh_ownership.py`，独立原生 Host、本地 SSE 模型、两次停启 | 7 项通过 |
+| 客户端发送失败与返回结果 | `verify_dsh_client.mjs`，实际客户端拦截器、loopback HTTP 服务 | 4 项通过 |
 | 既有 Pi MCP 工具行为 | `verify_local.py`，独立 loopback sshd | 23 项通过 |
 | 既有远端工作区入口 | `verify_workspace_local.py`，两个并行目录与 HTTP MCP | 11 项通过 |
 
@@ -49,6 +50,7 @@ dsh web --remote --no-open
 .venv/bin/python verify_dsh_mcp.py --models .local/dsh-dev/models.json --model-env .local/dsh-dev/model.env
 .venv/bin/python verify_dsh_context.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
 .venv/bin/python verify_dsh_ownership.py --node /home/kingguuu8/.local/node/bin/node
+/home/kingguuu8/.local/node/bin/node verify_dsh_client.mjs
 ```
 
 恢复脚本会暂时停止设备连接和重启 Host，应在空闲时运行。私有启动信息与完整验证记录位于忽略目录中。该版本验证了个人 Linux 环境；其他操作系统、多人权限隔离、远端扩展与持久交互式终端尚未覆盖。安装和维护方式见 [云端 DSH](DSH_REMOTE.md)。
@@ -62,6 +64,18 @@ dsh web --remote --no-open
 浏览器验证完成两轮模拟模型对话，确认两个新窗口身份不同、当前窗口刷新及插件更新保留身份；服务重启后原窗口继续可输入，查看者保持只读；明确接管后再次重启，新控制窗口可以直接发送。草稿在断线、发送失败、页面刷新和恢复后保留，重连期间没有自动提交。相关的 12 项模型上下文与连接回归、5 项实际工具桥和设备反馈回归全部通过。验证保留用户实际会话，临时 Host 与模型服务在结束后清理。
 
 新版在云端所有会话空闲时备份并部署。13 个部署源码文件的 SHA256 与本地一致；已有两个控制者从日志恢复，随机查看者保持只读；三个原生工作区可读取，云端、当前电脑和 VPS1 的真实文件工具探测通过，机器列表保持原值。用户原页面完成重连，保留会话与工作区，并按已有控制记录显示输入权限。
+
+## Web 连接反馈
+
+2026 年 10 月 8 日，隔离浏览器复现了两个问题：停止云端 Host 后，页面把当前工作区标成连接异常，发送失败显示底层 fetch 错误；断线期间打开工作环境面板，恢复后仍停留在空机器列表和禁用路径框。
+
+现版区分 RPC 业务结果与传输失败。业务失败保留其原因，传输失败显示云端断线；登录失效提供重新打开入口的说明。工作环境面板在重连后自动载入机器列表与原目录，首次读取失败也可以直接在面板内重试。目录加载请求在离开面板时取消。
+
+`verify_dsh_client.mjs` 的 4 项检查加载实际客户端拦截器并请求 loopback HTTP 服务，断言业务拒绝保留原因、服务端收到一次输入后丢失响应时提示结果未确认且没有重放、HTTP 401 给出登录恢复操作，以及主动取消保持取消结果。脚本覆盖 RPC 返回行为；页面状态由实际浏览器另行验证。
+
+浏览器验证实际移走隔离会话绑定的目录，确认显示工作区不可用，云端 API 与根工作区仍可用；恢复目录后，原面板自动载入同一目录。停止 Host 后，页面显示云端断线、保留草稿并提供重连入口；明确点击发送后显示结果未确认，草稿仍在。重启后原绑定保持、已完成轮次仍为 2，保留内容没有自动提交。断线时打开的工作环境面板恢复后自动重新读取目录；全局新建面板在恢复后点击重试可直接载入机器列表。过程只使用隔离 Host、本地模拟模型与临时目录，用户云端会话保持。
+
+临时 Host、模拟模型、目录和浏览器窗口已清理。新版在会话空闲时备份并更新到 VPS4；13 个源码文件哈希一致。部署后检查已有输入控制关系、查看者只读、三个原生工作区的文件读取及三台机器的真实工具探测均通过，机器目录保持云端、当前电脑和 VPS1。
 
 ## 设备安装
 
