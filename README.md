@@ -1,6 +1,6 @@
 # Remote Pi MCP tools
 
-这个原型让 agent 通过一个 MCP 网关，使用 SSH 目标机器上的 Pi 工具。目标进程直接调用上游工具库；网关负责部署、连接、机器路由和 MCP 通信。
+这个原型让 Pi agent 会话绑定一个远端工作区。对话和模型配置保存在 agent 所在机器，文件、搜索与命令工具运行在 SSH 目标机器，项目指令也从目标目录读取。原有多机器 MCP 网关继续提供带机器前缀的工具。
 
 ~~~text
 MCP 客户端 / agent
@@ -11,6 +11,47 @@ Python MCP 网关
         ▼
 Node.js MCP 工具进程 → Pi 工具库 → 目标机器
 ~~~
+
+## 远端工作区会话
+
+remote-agent.mjs 使用 Pi SDK 创建会话，并用远端 MCP 实现替换 read、write、edit、bash、grep、find、ls。模型直接使用这七个原生名称。workspace_gateway.py 的一个进程固定绑定一台机器和一个目录，目录必须已存在；两个会话可以各自绑定同一机器上的不同项目。
+
+安装依赖并配置 targets.json 后启动：
+
+~~~bash
+uv sync --python 3.12
+npm ci
+node remote-agent.mjs --config targets.json --machine devbox --workspace /srv/my-project --model your-provider/your-model
+~~~
+
+模型认证与自定义模型沿用 agent 所在机器的 Pi 配置目录，默认是 ~/.pi/agent，也可用 --agent-dir 指定。--workspace 使用目标机器上的路径；相对路径以目标登录用户的 home 为起点。输入 /exit 结束交互。启动器使用仓库 .venv/bin/python 启动网关，--python 可指定其他已安装 MCP 依赖的 Python。
+
+启动时打印远端工作区 URI 和会话文件路径。恢复会话时传入该文件：
+
+~~~bash
+node remote-agent.mjs --config targets.json --machine devbox --workspace /srv/my-project --session /path/to/saved-session.jsonl
+~~~
+
+会话记录保存机器、SSH 地址与端口、规范化目录和 URI。恢复时检查这些字段，目录或机器改变会拒绝继续。--state-dir 可指定对话保存目录，默认是 ~/.local/share/remote-mcp-demo/agent。会话文件复用 Pi 的 JSONL 格式；同一个文件按单进程使用，不同会话可以并行运行。
+
+Pi 在目标机器上按上游规则加载项目与祖先目录中的 AGENTS.md、AGENTS.override.md 或 CLAUDE.md，以及目标用户的 Pi 全局指令。工作区身份、Git 根目录、分支和变更状态通过 workspace://context 资源返回。每轮用户请求前刷新这些数据；连接失败时停止该轮请求。文件引用带 ssh:// 地址，以保留机器和目录身份。
+
+单次执行与检查上下文：
+
+~~~bash
+node remote-agent.mjs --config targets.json --machine devbox --workspace /srv/my-project --prompt '检查这个项目并运行测试' --json
+node remote-agent.mjs --config targets.json --machine devbox --workspace /srv/my-project --inspect
+~~~
+
+其他 MCP 客户端可以直接接入工作区专属入口：
+
+~~~bash
+uv run python workspace_gateway.py --config targets.json --machine devbox --workspace /srv/my-project
+~~~
+
+该入口也支持 --transport http 和 --port。客户端需要主动读取 workspace://context 并将其加入模型上下文；remote-agent.mjs 已完成这一步。MCP 入口固定工具的执行位置，客户端负责会话与上下文绑定。
+
+当前启动器提供文本交互和单次执行。远端 Pi 的 skills、扩展、提示模板与 .pi/settings.json 尚未接入；远端文件 URI 保留定位信息，编辑器打开这些 URI 的操作还需要客户端支持。
 
 ## 工具来源
 
@@ -33,9 +74,12 @@ uv sync --python 3.12
 npm ci
 node worker.mjs --check-manifest
 uv run python verify_local.py
+uv run python verify_workspace_local.py
 ~~~
 
 verify_local.py 会启动独立 loopback sshd，使用临时 SSH 密钥和全新目标目录验证部署、全部 Pi 工具、图片、编辑边界、并发编辑、截断、进度、超时、取消、断开和恢复。结束后清理测试进程与目标目录，结果保存为 .local/verification-local.json。可用 --node 和 --npm 指定目标使用的可执行文件。
+
+verify_workspace_local.py 检查两个并行工作区、指令与 Git 上下文、工具执行位置、取消、会话保存与恢复、错误目录和 worker 重连。它使用真实 SSH、MCP 和 Pi 会话存储，模型调用留给 VPS 验证。
 
 依赖版本或工具选项改变后，重新生成并检查契约：
 
@@ -98,6 +142,14 @@ uv run python verify_vps.py --config .local/vps-check.json --agent-model your-pr
 
 检查从目标未连接的状态开始，要求 OpenCode 连接机器，写入、编辑、读取并搜索目标文件，随后执行命令确认主机。权限仅开放 demo 的 MCP 工具。脚本独立读取目标文件复核结果，报告位于 .local/verification-vps.json，客户端记录位于 .local/agent-check。
 
+让 Pi agent 实际运行在网关 VPS，并绑定目标 VPS 的工作区：
+
+~~~bash
+uv run python verify_workspace_vps.py --config .local/vps-check.json --agent-model your-provider/your-model
+~~~
+
+这个验证脚本读取本机已有的 OpenCode OpenAI-compatible provider 配置，临时为 VPS 上的 Pi 配置同一模型。SSH 私钥保留在本机，模型 API 凭据经 SSH 传入远端进程环境，临时 models.json 只保存环境变量引用。脚本检查模型读取远端项目指令并使用全部七个工具，同时复核目标文件内容和 CLI 的对话恢复。报告位于 .local/verification-workspace-vps.json；临时配置、会话、工作目录和测试进程在结束时清理。
+
 ## 生命周期与执行权限
 
 工具进程跟随 SSH 连接运行。重复连接复用已就绪的后端，同一目标的并发连接串行处理；工具进程退出后，网关保留契约和管理入口，再次连接恢复执行。工作文件和安装包留在目标机器，网关连接状态保存在内存中。
@@ -106,4 +158,4 @@ uv run python verify_vps.py --config .local/vps-check.json --agent-model your-pr
 
 workspace 是 Pi 工具的默认工作目录。文件工具支持绝对路径、上级目录和符号链接，文件与命令访问权限由 SSH 登录用户决定。bash 每次执行独立 shell，跨调用的目录与环境需要在命令中显式指定。HTTP 入口服务于能够访问该入口的客户端。
 
-当前适配范围是 Linux 目标上的 MCP tools。Pi 的终端 UI、agent 会话、模型上下文、持久 PTY，以及 MCP resources、prompts、sampling、elicitation 需要相应运行时或额外适配。统一 agent 的常驻部署与对话状态由接入的 agent 客户端管理。
+当前适配范围覆盖 Linux 目标上的 Pi 工具、工作区上下文资源和 Pi SDK 会话。启动器退出会关闭自己拥有的 stdio 网关与远端 worker；HTTP 网关的生命周期由启动它的进程管理。工作区入口会在 SSH 断开后的后续调用前尝试重连，已经发送且失败的调用返回错误，由 agent 判断后续操作。统一 agent 的常驻服务、终端 UI、持久 PTY 和其他 MCP 能力需要继续接入。

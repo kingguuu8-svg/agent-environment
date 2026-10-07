@@ -1,5 +1,6 @@
 """Executed over SSH: prepare an isolated tool bundle and print its launch info."""
 
+import fcntl
 import hashlib
 import json
 import os
@@ -16,9 +17,13 @@ def install(request: dict) -> dict:
         raise RuntimeError("This demo requires Python 3.11 or newer on the target")
     home = Path.home()
     base = (home / request["remote_base"]).resolve()
-    workspace = (home / request["workspace"]).resolve()
+    workspace = (home / Path(request["workspace"]).expanduser()).resolve()
+    if request.get("require_existing_workspace"):
+        if not workspace.is_dir():
+            raise ValueError(f"Workspace must be an existing directory: {workspace}")
+    else:
+        workspace.mkdir(parents=True, exist_ok=True)
     base.mkdir(mode=0o700, parents=True, exist_ok=True)
-    workspace.mkdir(parents=True, exist_ok=True)
     node = shutil.which(os.path.expanduser(request["node"]))
     npm = shutil.which(os.path.expanduser(request["npm"]))
     if not node or not npm:
@@ -29,6 +34,15 @@ def install(request: dict) -> dict:
     match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", node_version)
     if not match or tuple(map(int, match.groups())) < (22, 19, 0):
         raise RuntimeError(f"Pi requires Node.js >=22.19.0; found {node_version}")
+    # Separate workspace sessions share one bundle. Serialize npm ci so a second
+    # bootstrap cannot delete dependencies underneath a running installation.
+    with (base / ".install.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        bundle = install_bundle(request, base, node, npm)
+    return {**bundle, "workspace": str(workspace)}
+
+
+def install_bundle(request: dict, base: Path, node: str, npm: str) -> dict:
     worker = base / "worker.mjs"
     marker = base / "bundle.sha256"
     files = request["files"]
@@ -97,7 +111,6 @@ def install(request: dict) -> dict:
     return {
         "node": node,
         "worker": str(worker),
-        "workspace": str(workspace),
         "bundle_version": version,
         "reused": reused,
     }

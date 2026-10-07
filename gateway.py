@@ -127,6 +127,7 @@ async def bootstrap(target: dict) -> dict:
     request = {
         "remote_base": target["remote_base"],
         "workspace": target["workspace"],
+        "require_existing_workspace": target.get("require_existing_workspace", False),
         "files": {name: (ROOT / name).read_text() for name in BUNDLE_FILES},
         "node": target["node"],
         "npm": target["npm"],

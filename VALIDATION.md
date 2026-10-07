@@ -1,6 +1,6 @@
 # 验证记录
 
-Pi 工具包已通过本机 SSH、两台 VPS 和真实 agent 验证。目标进程直接使用 @earendil-works/pi-coding-agent@1.0.2 的 read、write、edit、bash、grep、find、ls，MCP 适配层保留上游输入、执行逻辑和结果。验证时间为 2026-10-07，结果对应本次实现。
+远端工作区会话已通过本机 SSH、HTTP 和 VPS 上的真实 Pi agent 验证。Pi 会话、模型调用与对话存储运行在 VPS 4，七个原生工具和项目上下文来自 VPS 1。验证时间为 2026-10-07。
 
 ## 环境与结果
 
@@ -8,7 +8,10 @@ Pi 工具包已通过本机 SSH、两台 VPS 和真实 agent 验证。目标进�
 | --- | --- | --- |
 | 本机 Fedora，Python 3.12.14，Node 22.23.2，独立 loopback sshd | verify_local.py，stdio MCP | 23 项通过 |
 | VPS 4 网关，Python 3.12；VPS 1 工具目标，Python 3.11.13、Node 22.22.3 | verify_vps.py，HTTP MCP 经 SSH 端口转发 | 23 项通过 |
-| OpenCode 1.18.29，cpa/gpt-6-sol，目标初始未连接 | verify_vps.py --agent-model cpa/gpt-6-sol | 10 次工具调用完成，全部 7 个 Pi 工具使用成功，目标文件独立复核通过 |
+| 本机 Pi SDK，两个并行项目，stdio 与 HTTP MCP | verify_workspace_local.py | 11 项通过，包含 CLI --url 检查与真实文件读取 |
+| VPS 4 Pi SDK，Node 22.23.2、cpa/gpt-6-sol；VPS 1 两个工作区 | verify_workspace_vps.py --agent-model cpa/gpt-6-sol | 12 项通过，真实模型成功调用全部 7 个工具，CLI 恢复保存的模型与对话 |
+
+此前的工具包版本 21faa88 还通过 OpenCode 1.18.29 的冷启动检查：10 次工具调用完成，全部 7 个 Pi 工具使用成功，目标文件独立复核通过。本次新增会话行为由 Pi SDK 和新启动器验证。
 
 两种协议验证都使用全新目标目录，首次安装记录为 reused=false。目标通过 npm ci 安装锁定的依赖，并核对真实工具定义与 pi-tools.json。package-lock.json 的包地址统一使用官方 npm 索引；本机和 VPS 都验证了这些地址的安装。
 
@@ -16,10 +19,22 @@ Pi 工具包已通过本机 SSH、两台 VPS 和真实 agent 验证。目标进�
 
 ~~~bash
 uv run python verify_local.py --node /home/kingguuu8/.local/node/bin/node --npm '/home/kingguuu8/Desktop/main/codex fandai/remote-mcp-demo/.local/npm-clean/package/bin/npm-cli.js'
-uv run python verify_vps.py --config .local/vps-check.json --agent-model cpa/gpt-6-sol
+uv run python verify_vps.py --config .local/vps-check.json
+uv run python verify_workspace_local.py --node /home/kingguuu8/.local/node/bin/node --npm '/home/kingguuu8/Desktop/main/codex fandai/remote-mcp-demo/.local/npm-clean/package/bin/npm-cli.js'
+uv run python verify_workspace_vps.py --config .local/vps-check.json --agent-model cpa/gpt-6-sol
 ~~~
 
 VPS 验证使用其已有 Node 和 npm。网关通过专用临时 SSH agent 获取目标登录能力，原有私钥保留在本机；主机密钥沿用已有 known_hosts 记录。
+
+## 工作区与会话
+
+两个会话在同一 SSH 机器上绑定 alpha project 和 beta project，启动时共享同一个 Pi 工具安装包。安装锁串行处理首次部署。文件工具与 bash 使用各自的目录；并发写入同名 proof.txt 后，各项目保持独立内容，agent 本机目录没有生成该文件。
+
+上下文资源返回机器与目录身份、Git 根目录和分支，并复用 Pi 的 loadProjectContextFiles 加载项目及祖先指令。验证向 agent 本机目录放入相反指令，确认它未进入项目上下文。修改目标 AGENTS.md 后，下一轮用户请求读取到 alpha-marker-v2。真实模型请求保存的系统上下文包含远端 URI，也替换了 Pi 默认提示中的本机文档路径。
+
+会话文件复用 Pi 的 JSONL 存储，并保存远端绑定。关闭后恢复，按 JSON 格式比较完整对话，检查原文件内容和保存的模型。随后通过 CLI 的 --session 再次恢复，省略 --model；模型从历史中回答之前验证的 alpha-verified-v2 内容，未调用工具。
+
+恢复到另一个工作区、打开不存在的会话文件，以及连接不存在的目标目录都会失败。错误目录不会被自动创建。worker 退出后的重连保持原绑定，已经失败的命令没有自动重放。取消测试检查目标 shell PID 已停止；Pi 的编辑参数准备、diff 和 MCP 进度也经过实际执行验证。
 
 ## 接口与文件操作
 
@@ -41,7 +56,15 @@ bash 的输出目录和主机名对应目标机器。非零退出保留 isError 
 
 ## Agent 调用
 
-OpenCode 从目标未连接的状态开始，实际完成：
+本次 Pi agent 在 VPS 4 使用普通工具名完成：
+
+~~~text
+write → edit → read / grep / find / ls / bash
+~~~
+
+它根据 VPS 1 的项目指令写入 model-proof.txt，将 marker 替换为 verified，再读取、搜索和定位文件，并确认目标目录与主机。另一条直接工具调用复核内容为 alpha-verified-v2 加换行；模型回复提供带 SSH 地址的文件引用。七次调用全部成功，具体顺序、文件内容和恢复后的回复保存在 .local/verification-workspace-vps.json。
+
+此前 OpenCode 的工具包检查从目标未连接的状态开始，实际完成：
 
 ~~~text
 list_machines
@@ -60,8 +83,8 @@ vps1__bash
 
 ## 范围与清理
 
-当前验证覆盖单用户、Linux SSH 目标和预选 Pi 工具包。Agent 客户端在本机运行，网关在 VPS 4；统一 agent 的常驻运行与对话状态管理需要部署相应客户端。Pi 的 agent 会话和终端 UI，以及持久 PTY、MCP resources、prompts、sampling、elicitation 属于额外运行时或适配范围。
+当前验证覆盖单用户、Linux SSH 目标、Pi 工具包、工作区上下文资源与 SDK 会话。新验证中的 Pi agent 实际运行在 VPS 4；旧网关协议检查的客户端在本机运行。常驻服务、完整终端 UI、远端 skills 与扩展、持久 PTY 和其他 MCP 能力尚未接入。同一会话文件按单进程使用，多个新会话可以并行工作。
 
-测试结束后关闭临时网关、worker 和 SSH agent，删除目标测试目录。VPS 4 保留最新网关文件和独立 Python 环境。完整 JSON 报告与客户端记录位于 Git 忽略的 .local 目录，使用方法见 README.md。
+测试结束后关闭临时网关、worker 和 SSH agent，删除目标测试目录。新验证也清理临时 Pi 模型配置和会话，模型 API 凭据仅传入进程环境。VPS 4 保留网关、启动器、Node 依赖及独立 Python 环境。完整 JSON 报告与客户端记录位于 Git 忽略的 .local 目录，使用方法见 README.md。
 
 静态检查通过：Ruff 代码与格式检查、Node 语法检查、生成契约一致性检查、Git diff 检查，以及 README.md、VALIDATION.md 的禁词校验。

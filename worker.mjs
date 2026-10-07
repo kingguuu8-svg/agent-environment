@@ -7,17 +7,22 @@ import {
   createLsToolDefinition,
   createReadToolDefinition,
   createWriteToolDefinition,
+  getAgentDir,
+  loadProjectContextFiles,
 } from "@earendil-works/pi-coding-agent";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   CallToolRequestSchema,
+  ListResourcesRequestSchema,
   ListToolsRequestSchema,
+  ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { resolve } from "node:path";
-import { parseArgs } from "node:util";
+import { parseArgs, promisify } from "node:util";
 import { Value } from "typebox/value";
 
 const { values } = parseArgs({
@@ -32,6 +37,32 @@ const piPackage = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.resolve("@earendil-works/pi-coding-agent")), "utf8"),
 );
 const provider = { name: piPackage.name, version: piPackage.version };
+const contextUri = "workspace://context";
+const execFileAsync = promisify(execFile);
+
+async function workspaceContext(signal) {
+  const gitCommand = async (...args) => {
+    try {
+      const { stdout } = await execFileAsync("git", args, {
+        cwd: workspace, signal, timeout: 5000, maxBuffer: 1024 * 1024,
+      });
+      return stdout.trimEnd();
+    } catch (error) {
+      if (signal.aborted) throw error;
+      return null;
+    }
+  };
+  const root = await gitCommand("rev-parse", "--show-toplevel");
+  const git = root === null ? null : {
+    root,
+    branch: await gitCommand("branch", "--show-current"),
+    status: await gitCommand("status", "--short"),
+  };
+  return {
+    hostname: hostname(), workspace, provider, git,
+    agents_files: loadProjectContextFiles({ cwd: workspace, agentDir: getAgentDir() }),
+  };
+}
 const definitions = [
   createReadToolDefinition(workspace),
   createWriteToolDefinition(workspace),
@@ -85,9 +116,24 @@ if (values.manifest) {
   const tools = new Map(definitions.map((tool) => [tool.name, tool]));
   const server = new Server(
     { name: "remote-pi-tools", version: "0.1.0" },
-    { capabilities: { tools: {} } },
+    { capabilities: { tools: {}, resources: {} } },
   );
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: manifest.tools }));
+  server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+    resources: [{
+      uri: contextUri,
+      name: "Remote workspace context",
+      description: "Workspace identity, Git state and project instructions loaded by Pi.",
+      mimeType: "application/json",
+    }],
+  }));
+  server.setRequestHandler(ReadResourceRequestSchema, async (request, extra) => {
+    if (request.params.uri !== contextUri) throw new Error(`Unknown resource: ${request.params.uri}`);
+    return { contents: [{
+      uri: contextUri, mimeType: "application/json",
+      text: JSON.stringify(await workspaceContext(extra.signal)),
+    }] };
+  });
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     try {
       const tool = tools.get(request.params.name);
