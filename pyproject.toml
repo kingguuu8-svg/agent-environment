@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "Prototype: SSH bootstrap and native MCP tool forwarding"
 requires-python = ">=3.11"
 dependencies = [
+    "anyio>=4.5,<5",
+    "jsonschema>=4.20,<5",
     "mcp==1.26.0",
     "uvicorn>=0.34,<1",
 ]

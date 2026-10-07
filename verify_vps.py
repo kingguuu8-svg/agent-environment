@@ -12,7 +12,7 @@ import time
 import uuid
 from pathlib import Path
 
-from gateway import load_targets, ssh_args
+from gateway import BUNDLE_FILES, load_targets, ssh_args
 from ssh_fixture import free_port
 from verify import verify
 
@@ -30,6 +30,7 @@ subprocess.run([str(venv / 'bin/python'), '-m', 'pip', 'install', '--quiet',
                check=True, stdout=sys.stderr, timeout=180)
 for name, content in payload['files'].items():
     (base / name).write_text(content)
+(base / 'worker.py').unlink(missing_ok=True)
 run = base / '.local' / payload['run_id']
 run.mkdir(mode=0o700, parents=True, exist_ok=True)
 (run / 'known_hosts').write_text(payload['known_hosts'])
@@ -117,7 +118,7 @@ def run(args):
             "run_id": run_id,
             "files": {
                 name: (ROOT / name).read_text()
-                for name in ["gateway.py", "bootstrap.py", "worker.py"]
+                for name in ["gateway.py", "bootstrap.py", *BUNDLE_FILES]
             },
             "known_hosts": known,
             "denied_key": denied_key.read_text(),

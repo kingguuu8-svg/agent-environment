@@ -13,8 +13,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output", type=Path, default=ROOT / ".local/verification-local.json"
     )
+    parser.add_argument("--node", default="node")
+    parser.add_argument("--npm", default="npm")
     args = parser.parse_args()
-    with SSHFixture() as fixture:
+    with SSHFixture(node=args.node, npm=args.npm) as fixture:
         result = asyncio.run(
             verify(
                 argparse.Namespace(

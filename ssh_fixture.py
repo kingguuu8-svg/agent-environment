@@ -21,7 +21,7 @@ def free_port() -> int:
 
 
 class SSHFixture:
-    def __init__(self):
+    def __init__(self, *, node="node", npm="npm"):
         self.run_id = uuid.uuid4().hex[:12]
         self.directory = ROOT / ".local" / self.run_id
         self.directory.mkdir(parents=True, mode=0o700)
@@ -32,6 +32,8 @@ class SSHFixture:
         self.target_root = Path.home() / ".cache/remote-mcp-demo-tests" / self.run_id
         self.target_root.mkdir(parents=True, mode=0o700)
         self.config = self.directory / "targets.json"
+        self.node = node
+        self.npm = npm
 
     def __enter__(self):
         try:
@@ -88,6 +90,8 @@ class SSHFixture:
                 "identity_file": str(self.directory / "client_key"),
                 "known_hosts_file": str(known_hosts),
                 "python": sys.executable,
+                "node": self.node,
+                "npm": self.npm,
                 "remote_base": str(self.target_root / "bundle"),
                 "workspace": str(self.target_root / "workspace"),
             }

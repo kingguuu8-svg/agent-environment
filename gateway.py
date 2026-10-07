@@ -13,20 +13,49 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
 
+import anyio
+import jsonschema
 import uvicorn
 from mcp import ClientSession, StdioServerParameters, types
 from mcp.client.stdio import stdio_client
 from mcp.server.lowlevel import NotificationOptions, Server
 from mcp.server.stdio import stdio_server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+from mcp.shared.exceptions import McpError
 from starlette.applications import Starlette
 from starlette.routing import Route
 
-from worker import create_worker
-
 ROOT = Path(__file__).resolve().parent
-WORKER_REQUIREMENT = "mcp==1.26.0"
+BUNDLE_FILES = ("worker.mjs", "package.json", "package-lock.json", "pi-tools.json")
 LOG = logging.getLogger("remote-mcp-demo")
+
+
+class CancellationClientSession(ClientSession):
+    async def send_request(self, *args, **kwargs):
+        # MCP Python 1.26.0 closes its response stream on cancellation/timeout without
+        # sending notifications/cancelled. Capture the ID before super increments
+        # it (no await in between), so Pi receives the request's AbortSignal.
+        request_id = self._request_id
+        try:
+            return await super().send_request(*args, **kwargs)
+        except (asyncio.CancelledError, McpError) as error:
+            if isinstance(error, McpError) and error.error.code != 408:
+                raise
+            with anyio.CancelScope(shield=True):
+                try:
+                    await self.send_notification(
+                        types.ClientNotification(
+                            types.CancelledNotification(
+                                params=types.CancelledNotificationParams(
+                                    requestId=request_id,
+                                    reason="Caller cancelled or timed out",
+                                )
+                            )
+                        )
+                    )
+                except Exception:
+                    LOG.debug("Could not forward cancellation", exc_info=True)
+            raise
 
 
 class GatewayServer(Server):
@@ -49,6 +78,8 @@ def load_targets(config: Path) -> dict[str, dict]:
         target.setdefault("workspace", ".local/share/remote-mcp-demo/workspace")
         target.setdefault("remote_base", ".local/share/remote-mcp-demo/bundle")
         target.setdefault("python", "python3")
+        target.setdefault("node", "node")
+        target.setdefault("npm", "npm")
         target.setdefault("port", 22)
         if not 1 <= target["port"] <= 65535:
             raise ValueError(f"Invalid SSH port for {machine}")
@@ -96,9 +127,10 @@ async def bootstrap(target: dict) -> dict:
     request = {
         "remote_base": target["remote_base"],
         "workspace": target["workspace"],
-        "worker_source": (ROOT / "worker.py").read_text(),
-        "requirement": WORKER_REQUIREMENT,
-        "index_url": target.get("index_url", "https://pypi.org/simple"),
+        "files": {name: (ROOT / name).read_text() for name in BUNDLE_FILES},
+        "node": target["node"],
+        "npm": target["npm"],
+        "npm_registry": target.get("npm_registry", "https://registry.npmjs.org"),
     }
     try:
         stdout, stderr = await asyncio.wait_for(
@@ -130,6 +162,7 @@ class Backend:
         self.stop = asyncio.Event()
         self.task: asyncio.Task | None = None
         self.ready: asyncio.Future | None = None
+        self.calls: set[asyncio.Task] = set()
 
     async def connect(self) -> None:
         self.state = "connecting"
@@ -161,7 +194,7 @@ class Backend:
     async def run(self) -> None:
         command = shlex.join(
             [
-                self.info["python"],
+                self.info["node"],
                 self.info["worker"],
                 "--workspace",
                 self.info["workspace"],
@@ -176,7 +209,7 @@ class Backend:
         )
         try:
             async with stdio_client(params) as (read, write):
-                async with ClientSession(
+                async with CancellationClientSession(
                     read, write, read_timeout_seconds=timedelta(seconds=150)
                 ) as session:
                     self.session = session
@@ -200,9 +233,43 @@ class Backend:
             self.tools = []
             if self.state != "failed":
                 self.state = "disconnected"
+            await self.cancel_calls()
             await self.gateway.notify()
 
+    async def call_tool(self, name, arguments, *, progress_callback=None):
+        if self.state != "ready" or self.session is None:
+            raise RuntimeError(f"Machine {self.machine} is disconnected")
+        call = asyncio.create_task(
+            self.session.call_tool(name, arguments, progress_callback=progress_callback)
+        )
+        self.calls.add(call)
+        try:
+            return await asyncio.shield(call)
+        except asyncio.CancelledError:
+            # AnyIO may repeatedly cancel the waiting handler. Keep its raw
+            # asyncio RPC task alive until it forwards cancellation to Pi.
+            with anyio.CancelScope(shield=True):
+                call.cancel()
+                await asyncio.gather(call, return_exceptions=True)
+            if self.state != "ready":
+                raise RuntimeError(
+                    f"Machine {self.machine} disconnected during tool execution"
+                ) from None
+            raise
+        finally:
+            self.calls.discard(call)
+
+    async def cancel_calls(self):
+        calls = list(self.calls)
+        for call in calls:
+            call.cancel()
+        await asyncio.gather(*calls, return_exceptions=True)
+
     async def close(self) -> None:
+        # Complete pending calls while the MCP stream can still carry their
+        # cancellation notifications, before the owning task exits the session.
+        self.state = "disconnecting"
+        await self.cancel_calls()
         self.stop.set()
         if self.task:
             await self.task
@@ -219,17 +286,21 @@ class Gateway:
         self.server = GatewayServer("remote-mcp-demo")
         # The bundle is selected before installation. Its contract is available
         # even for clients that snapshot the tool list at the start of a turn.
-        self.bundle = create_worker(ROOT)
+        manifest = json.loads((ROOT / "pi-tools.json").read_text())
+        self.declared_tools = [
+            types.Tool.model_validate(tool) for tool in manifest["tools"]
+        ]
 
         @self.server.list_tools()
         async def list_tools() -> list[types.Tool]:
             self.clients.add(self.server.request_context.session)
             tools = self.management_tools()
-            declared = await self.bundle.list_tools()
             for machine in self.targets:
                 backend = self.backends.get(machine)
                 native = (
-                    backend.tools if backend and backend.state == "ready" else declared
+                    backend.tools
+                    if backend and backend.state == "ready"
+                    else self.declared_tools
                 )
                 tools.extend(
                     tool.model_copy(update={"name": f"{machine}__{tool.name}"})
@@ -237,9 +308,15 @@ class Gateway:
                 )
             return tools
 
-        @self.server.call_tool()
+        @self.server.call_tool(validate_input=False)
         async def call_tool(name: str, arguments: dict):
             self.clients.add(self.server.request_context.session)
+            # Pi prepares model-produced arguments before validating them.
+            # Delegate remote validation to the worker to preserve that order.
+            for tool in self.management_tools():
+                if name == tool.name:
+                    jsonschema.validate(arguments, tool.inputSchema)
+                    break
             if name == "list_machines":
                 return {"machines": self.status()}
             if name in ("connect_machine", "disconnect_machine"):
@@ -279,7 +356,20 @@ class Gateway:
             if remote_name not in {tool.name for tool in backend.tools}:
                 raise ValueError(f"Unknown remote tool: {name}")
             # Preserve every MCP content block, structured output, and isError.
-            return await backend.session.call_tool(remote_name, arguments)
+            context = self.server.request_context
+
+            async def progress_callback(progress, total, message):
+                await context.session.send_progress_notification(
+                    context.meta.progressToken, progress, total, message
+                )
+
+            return await backend.call_tool(
+                remote_name,
+                arguments,
+                progress_callback=progress_callback
+                if context.meta and context.meta.progressToken is not None
+                else None,
+            )
 
     def management_tools(self) -> list[types.Tool]:
         machine_schema = {

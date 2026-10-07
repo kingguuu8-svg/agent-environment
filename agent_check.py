@@ -23,13 +23,13 @@ async def confirm(url, machine):
         ) as client,
     ):
         await client.initialize()
-        result = await client.call_tool(
-            f"{machine}__read_file", {"path": "agent-proof.txt"}
+        result = await client.call_tool(f"{machine}__read", {"path": "agent-proof.txt"})
+        assert not result.isError
+        assert (
+            "\n".join(item.text for item in result.content if item.type == "text")
+            == PROOF
         )
-        assert not result.isError and result.structuredContent["content"] == PROOF
-        await client.call_tool(
-            f"{machine}__run_command", {"command": "rm -f agent-proof.txt"}
-        )
+        await client.call_tool(f"{machine}__bash", {"command": "rm -f agent-proof.txt"})
         await client.call_tool("disconnect_machine", {"machine": machine})
 
 
@@ -59,9 +59,11 @@ def check(url, machine, model):
         f"Verify the demo remote MCP tools using only demo tools. "
         f"First call list_machines and connect_machine with machine={machine}. "
         f"After a successful connection, use {machine}__machine_info, "
-        f"{machine}__write_file to write agent-proof.txt containing exactly "
-        "'agent used native MCP tools\\n', then edit_file replacing 'native' with 'remote'. "
-        "Read the file to confirm. Run run_command with 'pwd; hostname' to confirm "
+        f"{machine}__write to write agent-proof.txt containing exactly "
+        f"'agent used native MCP tools\\n', then {machine}__edit with edits[] replacing 'native' with 'remote'. "
+        f"Read the file to confirm. Use {machine}__grep to find 'remote' in agent-proof.txt, "
+        f"{machine}__find to find agent-proof.txt, and {machine}__ls to list the workspace. "
+        f"Run {machine}__bash with 'pwd; hostname' to confirm "
         "the actual target. Finish by reporting the hostname and verified file content. "
         "Do not use local tools or delegate. If newly connected tools remain unavailable, "
         "report that limitation instead of claiming success."
@@ -108,10 +110,13 @@ def check(url, machine, model):
         f"demo_{machine}__{name}"
         for name in (
             "machine_info",
-            "write_file",
-            "edit_file",
-            "read_file",
-            "run_command",
+            "write",
+            "edit",
+            "read",
+            "bash",
+            "grep",
+            "find",
+            "ls",
         )
     }
     report = {

@@ -2,6 +2,9 @@
   "targets": {
     "devbox": {
       "host": "your-ssh-config-alias",
+      "python": "python3.11",
+      "node": "node",
+      "npm": "npm",
       "workspace": ".local/share/remote-mcp-demo/workspace"
     }
   }

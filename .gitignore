@@ -2,6 +2,7 @@
 .local/
 __pycache__/
 .ruff_cache/
+node_modules/
 *.pyc
 targets.json
 vps-check.json

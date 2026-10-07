@@ -7,7 +7,9 @@
     "target": {
       "host": "user@192.0.2.20",
       "identity_file": "/home/you/.ssh/target_key",
-      "python": "python3.11"
+      "python": "python3.11",
+      "node": "node",
+      "npm": "npm"
     }
   }
 }
