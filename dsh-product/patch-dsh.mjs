@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { remoteConversationStore } from "./remote-drafts.mjs";
 import { ensureFrontendExports } from "./frontend-exports.mjs";
+import { patchMachineSidebar } from "./remote-sidebar.mjs";
 ensureFrontendExports();
 process.stdout.write("DSH Markdown context exports ready\n");
 const require = createRequire(import.meta.url);
@@ -25,6 +26,13 @@ if (!source.includes(marker)) {
   writeFileSync(path, source);
 }
 process.stdout.write("DSH file-browser binding integration ready\n");
+const workspaceManifestPath = require.resolve("@deepseek-ai/dsh-client-ui-workspace/package.json");
+if (JSON.parse(readFileSync(workspaceManifestPath, "utf8")).version !== "0.2.0-rc.2") throw new Error("Revalidate DSH machine-sidebar integration before upgrading");
+const workspacePath = join(dirname(workspaceManifestPath), "lib/client.js");
+const workspaceSource = readFileSync(workspacePath, "utf8");
+const groupedWorkspaceSource = patchMachineSidebar(workspaceSource);
+if (workspaceSource !== groupedWorkspaceSource) writeFileSync(workspacePath, groupedWorkspaceSource);
+process.stdout.write("DSH machine-sidebar integration ready\n");
 const conversationManifestPath = require.resolve("@deepseek-ai/dsh-client-ui-conversation/package.json");
 if (JSON.parse(readFileSync(conversationManifestPath, "utf8")).version !== "0.2.0-rc.2") throw new Error("Revalidate DSH composer integration before upgrading");
 const conversationPath = join(dirname(conversationManifestPath), "lib/client.js");

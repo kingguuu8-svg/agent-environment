@@ -331,6 +331,7 @@ window.__ModuleLoader__.load({
       const style = document.createElement("style");
       style.textContent = `
         .rw-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font:inherit;max-width:100%}
+        .rw-host-group+.rw-host-group{margin-top:12px}.rw-host-heading{width:100%;display:flex;align-items:center;gap:8px;padding:8px 6px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary,#999);font:inherit;font-size:12px;cursor:pointer;text-align:left}.rw-host-heading:hover{background:var(--dsw-alias-interactive-bg-hover,#80808018)}.rw-host-heading:focus-visible{outline:2px solid #729aff;outline-offset:-2px}.rw-host-heading[data-current]{color:var(--dsw-alias-label-primary,inherit)}.rw-host-heading>svg{width:15px;height:15px;flex:none}.rw-host-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;font-weight:600}.rw-host-count,.rw-host-chevron{flex:none;font-size:11px;color:var(--dsw-alias-label-tertiary,#999)}.rw-host-chevron{font-size:15px;width:10px;text-align:center}
         [class$="_heroWorkspaceRow"]:has(.rw-bar)>button{display:none}
         .rw-button{border:1px solid var(--dsw-alias-border-l4,#80808050);background:transparent;color:inherit;border-radius:8px;padding:7px 11px;font:inherit;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:7px}
         .rw-button:hover,.rw-folder:hover,.rw-machine:hover,.rw-shortcut:hover{background:var(--dsw-alias-interactive-bg-hover,#80808018)}
@@ -357,6 +358,38 @@ window.__ModuleLoader__.load({
       ctx.effect(() => () => style.remove(), "remote: styles");
 
       const shortTarget = (target) => `${target.hostname ?? target.machine} · ${target.workspace.split(/[\\/]/).filter(Boolean).at(-1) || "/"}`;
+      ctx.slots.inject("sidebar.workspaces", () => {
+        let catalog = null, loading = null, reload = false, disposed = false, preparing = false;
+        const subscribers = new Set(), controller = new AbortController();
+        const refresh = () => {
+          if (disposed) return;
+          if (loading) { reload = true; return; }
+          loading = api("catalog", {}, controller.signal).then((value) => {
+            if (!disposed) { catalog = value; for (const listener of subscribers) listener(); }
+          }).catch(() => {}).finally(() => {
+            loading = null;
+            if (reload) { reload = false; refresh(); }
+          });
+        };
+        const disposeRoot = ctx.slots.provideRoot({ props: {
+          remoteSidebarCatalog: { getSnapshot: () => catalog, subscribe: (listener) => { subscribers.add(listener); return () => subscribers.delete(listener); } },
+          remoteSidebarActions: { async createWorkspace(target) {
+            if (preparing || creatingSession) return;
+            preparing = true; showNotice("正在准备工作区…");
+            try {
+              const picked = await api("pick", { machine: target.machine, workspace: target.workspace });
+              await createInWorkspace(picked.workspaceId); refresh();
+            } catch (error) { showNotice(error.message, "error"); }
+            finally { preparing = false; }
+          } },
+        } });
+        const unsubscribe = ctx.workspaces.list.subscribe(refresh);
+        const visible = () => { if (document.visibilityState === "visible") refresh(); };
+        document.addEventListener("visibilitychange", visible);
+        const timer = setInterval(visible, 30000);
+        refresh();
+        return () => { disposed = true; controller.abort(); clearInterval(timer); unsubscribe(); disposeRoot(); subscribers.clear(); document.removeEventListener("visibilitychange", visible); };
+      });
       const icon = (name) => h("svg", { className: "rw-icon", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true }, h("path", { d: {
         folder: "M3 7V5a1 1 0 0 1 1-1h5l2 3h9a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7Z",
         machine: "M3 4h18v12H3ZM8 21h8M12 16v5",

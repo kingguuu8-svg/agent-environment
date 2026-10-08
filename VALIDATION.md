@@ -596,6 +596,27 @@ VPS4 新增独立 Caddy 站点并取得受信任的 HTTPS 证书。本机通过�
 
 证据位于 `.local/verification-environment-access.json`、`.local/environment-access-deployment.json`、`.local/verification-environment-access-public.json`。本轮验证协议与实际工具执行，接入说明的读取与执行由各客户端自己的 Agent 完成，尚未逐一验证不同客户端的模型行为。180 秒整体请求上限未在生产注入故障；工具超时与取消在隔离环境验证。
 
+## 按主机浏览会话
+
+验证命令：
+
+```bash
+node dsh-product/patch-dsh.mjs
+node verify_dsh_sidebar.mjs
+node verify_dsh_handoff_views.mjs
+node verify_dsh_drafts.mjs
+node verify_dsh_client.mjs
+.venv/bin/python verify_dsh_creation.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/pnpm/package-manager-store/v11/links/@/npm/11.20.0/61c2e921ea78f7591fa88d88213cbf6ad002cb23f6191f8d2971c6e08712a583/node_modules/npm/bin/npm-cli.js
+```
+
+13 项侧栏检查使用锁定版本的原生 `WorkspaceBrowser`、原生视图存储和实际插件源码。验证机器与目录归属、切换完成前后的位置、同名路径、保留自定义名称、默认目录名称、未登记目录加号、同一会话菜单与打开操作、归档筛选、目录树、平铺列表和主机折叠恢复。初次目录读取失败后可以刷新恢复，根数据使用 DSH 实际发布契约，插件卸载后移除刷新监听。纯组件检查替换图标、弹窗与时间显示，生产网页确认实际样式与原生组件组合。
+
+新建恢复的 15 项原生客户端、真实 Host 与 SSH 检查通过，隔离环境实际重启后保留另一设备的输入权和草稿；九项接力界面、13 项窗口草稿与四项输入失败回归通过。侧栏展示保持持久会话与工作区成员记录，等待中的切换跟随当前执行位置。Windows 路径在组件中验证，真实网页验证使用 Linux。
+
+VPS4 部署保留源码、原生侧栏包文件与权限备份。35 条会话日志及投影、26 份输入权、七个持久工作区、六份原配置、机器清单与云端草稿保持，运行源码哈希与本地一致。共享环境访问配置、服务配置和 Caddy 配置的哈希保持一致。生产只读页面显示云端、VPS1 和桌面三个主机分组，保留当前会话、目录、输入内容和查看模式，会话行没有重复。三台机器的原生文件与引用检查通过，生产验证没有模型请求、接管或切换。
+
+证据位于 `.local/verification-dsh-sidebar-host-groups-deployed.json`、`.local/verification-dsh-sidebar-production-ui.json` 与 `.local/verification-dsh-creation-verified.json`。
+
 ## 范围与清理
 
 前述 Pi 终端验证覆盖单用户 Linux、云端直接 SSH 登录目标、Pi 原生工具、工作区上下文、常驻 SDK 会话与额外 HTTP MCP。终端复用 Pi 的主要界面组件，完整 Pi 命令集、文件补全、图片粘贴、远端 skills 与扩展及持久 PTY 仍在后续范围。新设备的反向接入由 DSH 工具桥接连接提供。新提示等待当前任务结束后提交；运行期间可接管、取消和安排工作区切换。实际 NAS 尚未连接。
