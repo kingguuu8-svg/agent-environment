@@ -145,6 +145,8 @@ systemctl --user restart remote-dsh.service
 
 重启后重新运行本机 `dsh web --remote` 获取最新登录入口。已保存的会话、工作区和控制窗口恢复，页面在提交操作前自动获取新的输入凭据；旧进程的输入凭据失效。其他窗口继续查看，点击“接管输入”可接力。中断的工具调用保留其已发生的文件影响，后续请求检查实际状态。
 
+同一工作区的会话共享工具连接。连接恢复后，旧请求迟到的错误与项目指令回包只影响原连接，新连接上的任务和最新项目指令保持。失败命令不会自动重跑，后续请求继续使用原机器与目录。
+
 新接入的 Linux 设备可分别检查或重启：
 
 ```bash
@@ -176,6 +178,8 @@ Web 基于 DSH `0.2.0-rc.2`，通过插件复用其会话、聊天、分支、�
 可重复验证见 [验证记录](VALIDATION.md)。`verify_dsh.py` 检查真实模型、排队切换、重复请求、输入权和文件作用域；`verify_dsh_recovery.py` 会暂时停止本机反向连接并重启 VPS4 Host，应在空闲时执行。`verify_dsh_mcp.py` 使用独立 Host 与随机工具名验证新 HTTP MCP 的首次发现和调用。
 
 `verify_mcp_discovery.mjs` 与 `verify_dsh_discovery.py` 检查额外服务无响应时的完整发现、独立取消、恢复和同一会话的跨目标操作，使用临时 HTTP MCP 服务与本地固定模型响应。
+
+`verify_environment_recovery.mjs` 与 `verify_environment_recovery.py` 检查真实 Pi 连接恢复中的迟到错误、项目指令回包和独立取消；后者使用隔离 SSH 目标。`verify_dsh_environment_recovery.py` 通过真实 DSH 会话与本地 SSE 模型验证共享连接恢复、原命令执行次数、两个会话的输入权和 Host 重启。故障顺序由测试临时文件控制，生产 Host 沿用原接口。
 
 `verify_dsh_context.py` 在独立 Host 与 SSH 环境中抓取实际模型 HTTP 请求，检查切换前后目标、项目指令、历史保留及工作区命名，也检查查看窗口接力、无效选择、执行中接力和慢准备期间的控制权变化。Host 启动时修正旧的自动生成名称；用户手动命名继续保留。
 

@@ -161,23 +161,31 @@ export class Environment {
 
   async refresh(id, signal) {
     const entry = this.get(id);
+    let connection;
     try {
-      const connection = await this.connect(id);
+      connection = await this.connect(id);
       signal?.throwIfAborted();
       if (connection.fetchContext) {
         const context = await connection.fetchContext(signal);
+        signal?.throwIfAborted();
+        if (this.connections.get(id) !== connection) return entry.context;
         if (context.binding.uri !== entry.context.binding.uri) throw new Error(`Workspace identity changed: ${id}`);
         entry.context = context;
       }
+      if (this.connections.get(id) !== connection) return entry.context;
       delete entry.lastError;
       this.save();
     } catch (error) {
       // Preparing one turn also uses this shared connection. Cancellation or
       // a request timeout must leave unrelated sessions' tools running.
       if (signal?.aborted) throw error;
-      if (error.code !== -32001) await this.disconnect(id);
-      entry.lastError = error.message;
-      this.save();
+      // Opening already records its own failure. An old read cannot overwrite
+      // facts or availability from a connection another session has restored.
+      if (connection && this.connections.get(id) === connection) {
+        entry.lastError = error.message;
+        this.save();
+        if (error.code !== -32001) await this.disconnect(id, connection);
+      }
     }
     return entry.context;
   }
@@ -211,9 +219,13 @@ export class Environment {
           // here would also abort tools belonging to other cloud sessions.
           if (signal?.aborted || error.code === -32001) throw new Error(`${uri}: ${error.message}`);
           // A lost response may follow a successful mutation. Never replay it.
-          await this.disconnect(id);
-          entry.lastError = error.message;
-          this.save();
+          if (this.connections.get(id) === connection) {
+            // Record failure before awaiting close: recovery may complete
+            // during teardown, and its successful state must remain current.
+            entry.lastError = error.message;
+            this.save();
+            await this.disconnect(id, connection);
+          }
           throw new Error(`${uri}: ${error.message}`);
         }
         if (result.isError) throw new Error(`${uri}: ${result.content.filter((item) => item.type === "text").map((item) => item.text).join("\n")}`);
@@ -226,10 +238,12 @@ export class Environment {
     };
   }
 
-  async disconnect(id) {
+  async disconnect(id, expected) {
     const connection = this.connections.get(id);
+    if (expected && connection !== expected) return false;
     this.connections.delete(id);
     await connection?.close().catch(() => {});
+    return !!connection;
   }
   async close() {
     await Promise.allSettled([...this.connecting.values()]);

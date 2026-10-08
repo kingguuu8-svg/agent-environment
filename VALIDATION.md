@@ -10,6 +10,7 @@
 | 取消、目标离线、进程丢失、Host 重启 | `verify_dsh_recovery.py`，VPS4 与当前电脑，真实模型与实际服务停启 | 7 项通过 |
 | 新 HTTP MCP 的发现与调用 | `verify_dsh_mcp.py`，独立 DSH Host、真实模型、临时 HTTP MCP 服务 | 2 项通过 |
 | 部分 MCP 服务离线与发现恢复 | `verify_mcp_discovery.mjs`，官方 SDK HTTP 服务与共享环境；`verify_dsh_discovery.py`，独立 Host、loopback SSH 与本地 SSE 模型 | 14 项与 5 项通过 |
+| 共享连接恢复与迟到请求隔离 | `verify_environment_recovery.mjs` 与 `.py`，真实 Pi 与 loopback SSH；`verify_dsh_environment_recovery.py`，原生 Host 与本地 SSE 模型 | 本地 10 项、SSH 10 项与 Host 5 项通过 |
 | 模型请求、环境选择、接力与连接状态 | `verify_dsh_context.py`，独立 Host、loopback SSH、实际 HTTP 录制端点 | 24 项通过 |
 | 输入权持久恢复与分支独立 | `verify_dsh_ownership.py`，独立原生 Host、本地 SSE 模型、两次停启 | 7 项通过 |
 | 客户端发送失败与返回结果 | `verify_dsh_client.mjs`，实际客户端拦截器、loopback HTTP 服务 | 4 项通过 |
@@ -325,6 +326,28 @@ Host 现在将绑定会话的原生补全请求发送到当前目标 worker，�
 本机备份保存于当前窗口的会话存储，验证覆盖刷新与多次选择；关窗后的浏览器恢复尚未验证。云端保存当前草稿的文字与附件数量，附件内容仍由原窗口保管。macOS 与 Windows 真机安装验证继续待完成。
 
 新版已部署到 VPS4，只替换 Host 与客户端两份源码，并保留原件和权限备份。35 个会话日志及五项投影、26 个控制者、七个工作区分组、六份配置、机器清单与云端草稿保持；三台机器的原生文件与引用检查通过。生产页面刷新后保持原执行位置与查看权限，目标已连接，新增脚本错误为零。刷新后的第二次只读审计继续保持所有原状态，生产检查没有发送消息、接管或切换。部署与页面证据位于 `.local/verification-dsh-draft-choice-deployed.json`。
+
+## 共享连接恢复
+
+2026 年 10 月 8 日，真实 Pi 连接复现了旧请求关闭新连接的问题：A 的命令已经追加一次记录，连接中断后 B 恢复同一工作区并开始新任务；此时投递 A 的实际 SDK 关闭错误，会导致 B 的新任务也被关闭。修改前的记录确认新连接失效、新任务未完成，原命令未重跑。
+
+本轮按连接实例校验错误与信息回包的归属。旧连接的失败保留原请求错误，当前连接与已恢复的项目指令保持；当前连接确实失效时，后续请求仍能恢复原工作区。关闭原连接前先保存失败，避免慢关闭完成后覆盖期间已经恢复的健康状态。
+
+`verify_environment_recovery.mjs` 的本地 10 项和 `verify_environment_recovery.py` 的 SSH 10 项检查通过，覆盖迟到失败、迟到成功、旧实例关闭、慢关闭期间恢复、实际当前连接失败、业务错误、工具与信息读取取消，以及独立云端工具。所有文件操作均使用真实 Pi 工具；故障检查断言实际 SDK 关闭错误为 `-32000`，回复顺序由测试控制。
+
+`verify_dsh_environment_recovery.py` 的五项真实 Host 检查通过。A 的旧错误到达时，B 的原生 bash 继续完成；A 的原命令只追加一次，后半段未执行。实际模型请求包含恢复后的项目指令，两个会话保持绑定与输入权，随后继续使用远端和独立云端工具。Host 重启后，会话四项投影与控制者保持，读取文件没有增加模型请求；八条模型请求全部来自隔离 SSE 端点。
+
+本轮上下文 24 项、输入权七项、MCP 发现 14 项与实际 Host 发现五项回归通过，JavaScript 语法、Python lint 与格式检查通过。新增 Host 检查首次遇到原生文件预览去除行尾换行的断言差异，按实际返回格式修正后通过。测试只在临时 Host 中加载故障脚本，生产代码没有新增调试接口。证据位于 `.local/verification-connection-generation-before.json`、`.local/verification-environment-recovery.json`、`.local/verification-environment-recovery-ssh.json` 和 `.local/verification-dsh-environment-recovery.json`。临时 Host、SSH、模型端点与目标目录已清理；macOS 与 Windows 真机安装仍待验证。
+
+复现命令：
+
+```bash
+node verify_environment_recovery.mjs
+uv run python verify_environment_recovery.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
+uv run python verify_dsh_environment_recovery.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
+```
+
+新版已部署到 VPS4，只替换 `environment.mjs`，原件与权限保留备份。35 个会话日志及投影、26 个输入权记录、七个工作区分组、六份配置、机器清单与云端草稿保持；三台机器的文件与引用检查通过。原页面只读刷新后保留会话、机器、目录和查看权限，目标已连接。生产检查没有发送消息、接管或切换，部署证据位于 `.local/verification-dsh-connection-recovery-deployed.json`。
 
 ## 设备安装
 
