@@ -1,4 +1,4 @@
-# Agent Environment
+# DSH Remote Hub
 
 给你的 Agent 一份跨设备的工作环境。一个常驻服务登记机器、工作区和 MCP 服务；Agent 可以保留自己的模型、会话和本地工具，通过同一个入口调用其他机器上的原生工具。
 
@@ -20,8 +20,8 @@
 在 Linux 服务器或开发机准备 Node.js 22.19.0+、Python 3.11+、[uv](https://docs.astral.sh/uv/getting-started/installation/) 和 OpenSSH 客户端，然后获取源码并启动环境：
 
 ```bash
-git clone https://github.com/kingguuu8-svg/agent-environment.git
-cd agent-environment
+git clone https://github.com/kingguuu8-svg/dsh-remote-hub.git
+cd dsh-remote-hub
 sh scripts/setup.sh environment
 mkdir -p "$HOME/agent-workspace"
 python3 agent_environment.py init --workspace "$HOME/agent-workspace"

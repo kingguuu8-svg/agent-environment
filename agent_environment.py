@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Initialize and run a personal Agent Environment from a source checkout."""
+"""Initialize and run DSH Remote Hub from a source checkout."""
 
 import argparse
 import hashlib
@@ -121,7 +121,7 @@ def initialize(args):
             "credentialHash": hashlib.sha256((args.account + "\0" + key).encode()).hexdigest(),
         })
         connection = {"url": url, "account": args.account, "key": key}
-        save(staged / "connection.md", "# Agent Environment\n\n将本文件交给正在使用的 Agent，并让它接入这个环境。\n\n```json\n"
+        save(staged / "connection.md", "# DSH Remote Hub\n\n将本文件交给正在使用的 Agent，并让它接入这个环境。\n\n```json\n"
              + json.dumps(connection, ensure_ascii=False, indent=2)
              + "\n```\n\n先 GET 网址读取协议，再使用 HTTP Basic 认证列出目标。选定目标后读取 context，将对应项目指令用于该工作区，再调用工具。每次调用明确指定 target。MCP 入口见协议。\n\n密钥允许使用所有已登记资源，工具沿用目标用户的系统权限。请将本文件保存在私有位置。\n")
         if urlsplit(url).scheme == "https":
@@ -251,7 +251,7 @@ def service(args):
     def quote(value):
         return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%") + '"'
     command = [sys.executable, str(ROOT / "agent_environment.py"), "start", "--directory", str(directory)]
-    text = "\n".join(["[Unit]", "Description=Agent Environment", "Wants=network-online.target", "After=network-online.target", "",
+    text = "\n".join(["[Unit]", "Description=DSH Remote Hub", "Wants=network-online.target", "After=network-online.target", "",
                       "[Service]", "Type=simple", "WorkingDirectory=" + str(ROOT).replace("%", "%%"),
                       "ExecStart=" + " ".join(quote(part) for part in command), "Restart=on-failure", "RestartSec=10", "UMask=0077",
                       "", "[Install]", "WantedBy=default.target", ""])

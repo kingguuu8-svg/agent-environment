@@ -53,5 +53,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: matrix.mode == 'dsh'
         with:
-          name: agent-environment-source
+          name: dsh-remote-hub-source
           path: .local/releases/*

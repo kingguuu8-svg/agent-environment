@@ -18,7 +18,7 @@ def build(destination, root=ROOT):
     version = json.loads((root / "package.json").read_text())["version"]
     if not re.fullmatch(r"\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?", version):
         raise ValueError("Invalid source release version")
-    name = "agent-environment-" + version
+    name = "dsh-remote-hub-" + version
     destination.mkdir(parents=True, exist_ok=True)
     archive = destination / (name + ".tar.gz")
     hashes = {path: hashlib.sha256((root / path).read_bytes()).hexdigest() for path in files if path != "SOURCE_MANIFEST.json"}

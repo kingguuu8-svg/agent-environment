@@ -1,6 +1,6 @@
 # Third-party notices
 
-Agent Environment is licensed under MIT. Dependencies keep their own licenses; package lockfiles pin the installed versions. Source releases contain our adapters and DSH integration patches. npm installs the upstream packages together with their license files.
+DSH Remote Hub is licensed under MIT. Dependencies keep their own licenses; package lockfiles pin the installed versions. Source releases contain our adapters and DSH integration patches. npm installs the upstream packages together with their license files.
 
 ## Pi
 

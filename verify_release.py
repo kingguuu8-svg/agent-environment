@@ -55,7 +55,7 @@ def run():
             assert all(".local" not in item.name and ".git/" not in item.name and item.isfile() for item in package)
             extracted = Path(temporary) / "extracted"
             package.extractall(extracted, filter="data")
-        extracted /= "agent-environment-1.2.3"
+        extracted /= "dsh-remote-hub-1.2.3"
         assert check.check_sources(extracted) == sorted(files)
         print("PASS source archives exclude runtime/history, reproduce exactly and verify without Git")
         (extracted / "README.md").write_text("tampered")
