@@ -10,6 +10,7 @@ const React = require("react");
 const { act, create } = require("react-test-renderer");
 const { SlotCore } = await import(require.resolve("@deepseek-ai/dsh-client-ui-slots"));
 const { createSnapshotStore } = await import(require.resolve("@deepseek-ai/dsh-client-store"));
+const rendererSource = await readFile(require.resolve("@deepseek-ai/dsh-client-ui-renderer/package.json").replace("package.json", "lib/client.js"), "utf8");
 const nativeSource = await readFile(require.resolve("@deepseek-ai/dsh-client-ui-tool/package.json").replace("package.json", "lib/client.js"), "utf8");
 const clientSource = await readFile(process.argv[2] ?? new URL("./dsh-product/plugin/client.js", import.meta.url), "utf8");
 const report = JSON.parse(await readFile(new URL("./.local/verification-dsh-pi-results.json", import.meta.url), "utf8"));
@@ -36,8 +37,14 @@ runInNewContext(nativeSource.replace(anchor, `${anchor}\nexports.test = { FileMu
     }).test.FileMutationRow;
   } } }, TextEncoder, TextDecoder,
 });
+let bindSnapshotSelector;
+runInNewContext(rendererSource.replace(anchor, `${anchor}\nexports.test = { bindSnapshotSelector };`), {
+  window: { __ModuleLoader__: { load(definition) {
+    bindSnapshotSelector = definition.factory((name) => name.startsWith("react-dom") ? {} : require(name)).test.bindSnapshotSelector;
+  } } }, console,
+});
 
-function fixture(late = false) {
+function fixture(late = false, history = null) {
   const slots = new SlotCore(), cleanup = [];
   const factoryDispose = slots.registerFactory({ name: "test-tool", scope: "root", children: {
     "tool.call.toolview": { kind: "keyed", scope: "session" },
@@ -59,8 +66,13 @@ function fixture(late = false) {
   plugin.apply({
     slots: { register: slots.register.bind(slots), entriesOfSlot: slots.entriesOfSlot.bind(slots), subscribe: slots.subscribe.bind(slots),
       inject(name, register) { if (name === "tool.call.toolview") cleanup.push(register()); } },
-    connection: { rpc: { call() { throw new Error("Rendering cannot make an RPC request"); } } },
-    uiWorkspace: { selection: createSnapshotStore({}), startSession() {} },
+    connection: { rpc: { call: history?.rpc ?? (() => { throw new Error("Rendering cannot make an RPC request"); }) } },
+    uiWorkspace: { selection: history?.selection ?? createSnapshotStore({}), startSession() {} },
+    sessions: history ? { binding(sessionId) {
+      assert.equal(sessionId, history.sessionId);
+      return { session: { projections: { faceOf(key) { assert.equal(key, "remoteBinding"); return history.projection; } } } };
+    } } : undefined,
+    sidebarRight: history?.sidebarRight,
     effect(register) { cleanup.push(register()); },
   });
   return {
@@ -148,4 +160,62 @@ try {
   assert.equal(late.entry().component, NativeEdit);
   passed("late native registration receives the same wrapper and teardown preserves native ownership");
 } finally { late.close(); }
+
+const sessionId = "session-history", origin = actual.meta.remotePi.origin;
+assert.ok(origin);
+const current = { id: "other-project", machine: "laptop", workspace: "/remote/other" };
+const projection = createSnapshotStore({ current, pending: null, revision: 1 });
+const selection = createSnapshotStore({ sessionId });
+let reply, rejectReply;
+const opened = [], requests = [];
+const history = fixture(false, { sessionId, projection, selection,
+  rpc(channel, endpoint, payload) {
+    assert.equal(channel, "/api"); assert.equal(endpoint, "remoteWorkspaces/toolOrigin");
+    requests.push(payload.args.request);
+    return new Promise((resolve, reject) => { reply = resolve; rejectReply = reject; });
+  },
+  sidebarRight: { openResource(address, options) { opened.push({ address, options }); } },
+});
+let historyRoot;
+try {
+  const entry = history.entry(), injected = entry.inject(sessionId);
+  assert.equal(injected.historySessionId, sessionId);
+  const useToolBinding = bindSnapshotSelector(injected.hooks.toolBinding);
+  await act(async () => { historyRoot = create(React.createElement(entry.component, {
+    ...props, callId: actual.callId, historySessionId: injected.historySessionId, useToolBinding,
+  })); });
+  assert.ok(textOf(historyRoot.toJSON()).includes("执行于 "));
+  await act(async () => projection.set({ current: origin, pending: current, revision: 2 }));
+  assert.ok(!textOf(historyRoot.toJSON()).includes("执行于 "));
+  await act(async () => projection.set({ current, pending: null, revision: 3 }));
+  assert.ok(textOf(historyRoot.toJSON()).includes("执行于 "));
+  passed("the actual injected selector follows the owning session and distinguishes current from pending workspaces");
+
+  const button = () => historyRoot.root.findAllByType("button").find((item) => item.props.onKeyDown);
+  const scopeId = "remote-tool-file:" + JSON.stringify([sessionId, actual.callId]);
+  let pending;
+  await act(async () => { pending = button().props.onClick({ stopPropagation() {} }); });
+  assert.equal(opened.length, 0);
+  await act(async () => { reply({ ok: true, value: { binding: origin, scopeId } }); await pending; });
+  assert.equal(requests[0].sessionId, sessionId);
+  assert.equal(requests[0].callId, actual.callId);
+  assert.equal(opened[0].address, `dsh-resource://file/session/${encodeURIComponent(scopeId)}/${encodeURIComponent("说明 空格.txt")}`);
+  assert.equal(projection.getSnapshot().current, current);
+  passed("the real native file button waits for authoritative origin and opens its Unicode path without switching the session");
+
+  await act(async () => { pending = button().props.onClick({ stopPropagation() {} }); });
+  selection.set({ sessionId: "another-session" });
+  await act(async () => { reply({ ok: true, value: { binding: origin, scopeId } }); await pending; });
+  assert.equal(opened.length, 1);
+  selection.set({ sessionId });
+  for (const result of [() => reply({ ok: false, error: { message: "Original target missing" } }), () => rejectReply(new Error("HTTP 503"))]) {
+    await act(async () => { pending = button().props.onClick({ stopPropagation() {} }); });
+    await act(async () => { result(); await pending; });
+    assert.equal(opened.length, 1);
+  }
+  passed("late origin replies and business or transport failures cannot open a different session's file or use the current target");
+} finally {
+  if (historyRoot) await act(async () => historyRoot.unmount());
+  history.close();
+}
 console.log(JSON.stringify({ checks, passed: true }));

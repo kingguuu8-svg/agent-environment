@@ -17,7 +17,7 @@ import { Environment, readJson, writeJson } from "../../environment.mjs";
 import { createPiToolDefinition } from "../pi-tool-result.mjs";
 
 export const name = "remote-workspaces";
-export const inject = ["agents", "sessions", "sessionController", "sessionProjections", "tools", "systemPrompt", "workspaceFiles", "workspaceRegistry", "fileReferences"];
+export const inject = ["agents", "sessions", "sessionController", "sessionProjections", "tools", "systemPrompt", "workspaceFiles", "workspaceRegistry", "fileReferences", "typert"];
 export const Config = z.object({ stateDir: z.string().required(), targets: z.string().required(), python: z.string().required(), cloudWorkspace: z.string().required() });
 const eventType = "remote/workspace";
 const handoffEventType = "remote/handoff";
@@ -25,6 +25,8 @@ const bindingSchema = schema.object({ id: schema.string(), machine: schema.strin
 const projectionSchema = schema.object({ current: bindingSchema.nullable(), pending: bindingSchema.nullable(), revision: schema.number().int().nonnegative() });
 const invocationInitializers = [];
 const execute = promisify(execFile);
+const historyScopePrefix = "remote-tool-file:";
+const fileToolNames = new Set(["read", "write", "edit"]);
 
 function fail(message) { throw new RemoteError("gateway/bad-request", message, {}); }
 function checkRequest(request) { if (!request || typeof request !== "object" || Array.isArray(request)) fail("Invalid request"); }
@@ -135,6 +137,7 @@ export class RemoteWorkspaces extends TypertRemoteService {
       },
     }));
     this.installFileRouting();
+    this.installHistoricalFileScopes();
     this.installReferenceRouting();
     this.installInputGuard();
   }
@@ -425,7 +428,7 @@ export class RemoteWorkspaces extends TypertRemoteService {
     if (!descriptor) throw new Error(`Unknown tool ${name} on ${id}`);
     const result = await this.environment.definition(id, descriptor).execute(randomUUID(), args, signal);
     return { content: result.content,
-      ...(this.environment.get(id).kind !== "mcp" ? { _meta: { "remote/pi": result.details } } : {}),
+      ...(this.environment.get(id).kind !== "mcp" ? { _meta: { "remote/pi": { ...result.details, origin: this.binding(id) } } } : {}),
       ...(result.details?.structuredContent ? { structuredContent: result.details.structuredContent } : {}) };
   }
   reloadTargets() { this.environment.configuration = readJson(this.environment.config, {}); }
@@ -450,8 +453,49 @@ export class RemoteWorkspaces extends TypertRemoteService {
     }
   }
   async scopeBinding(scope) {
+    if (scope.historicalBinding) return scope.historicalBinding;
     const agent = await this.agent(scope.sessionId);
     return this.state(agent.session).current;
+  }
+  async toolOrigin(request, signal) {
+    checkRequest(request);
+    if (![request.sessionId, request.callId].every((value) => typeof value === "string" && value.length > 0 && value.length <= 1024)) fail("Invalid tool file identity");
+    // Inspect is a cold read: previewing history must not activate an Agent or
+    // apply a pending switch. Old logs can recover their origin at tool dispatch.
+    const inspection = await this.host.sessionController.inspect(request.sessionId, signal);
+    let current = this.anchors[inspection.meta.cwd] ?? (inspection.meta.cwd === this.environment.get("cloud").workspace ? this.binding("cloud") : null);
+    let call, origin, result;
+    for (const event of inspection.events) {
+      if (event.type === eventType) current = event.data.current;
+      else if (event.type === handoffEventType) current = event.data.binding.current;
+      else if (event.type === "tool/call" && event.data.callId === request.callId) {
+        if (call) fail("Ambiguous historical tool identity");
+        call = event.data; origin = current;
+      } else if (event.type === "tool/result" && event.data.message.toolCallId === request.callId) result = event.data;
+    }
+    if (!call || !fileToolNames.has(call.name)) fail("This history entry has no file preview");
+    if (result?.message.isError) fail("A failed tool call has no successful file preview");
+    const details = result?.meta?.remotePi;
+    if (details?.origin) origin = details.origin;
+    else if (details?.workspace && details.remote) origin = { id: details.workspace, machine: details.remote.machine, workspace: details.remote.workspace };
+    const parsed = bindingSchema.safeParse(origin);
+    if (!parsed.success) fail("The original workspace is unavailable for this history entry");
+    const entry = this.environment.get(parsed.data.id);
+    if (entry.kind === "mcp" || entry.machine !== parsed.data.machine || entry.workspace !== parsed.data.workspace) fail("The original workspace identity has changed");
+    return { binding: { ...parsed.data, hostname: parsed.data.hostname ?? entry.context?.hostname ?? parsed.data.machine },
+      scopeId: historyScopePrefix + JSON.stringify([request.sessionId, request.callId]) };
+  }
+  installHistoricalFileScopes() {
+    const native = this.host.typert.lookups.get("workspaceFileScope");
+    if (!native) throw new Error("The native workspace file scope is unavailable");
+    this.host.typert.lookups.configure("workspaceFileScope", async (scopeId) => {
+      if (typeof scopeId !== "string" || !scopeId.startsWith(historyScopePrefix)) return native.resolve(scopeId);
+      let identity;
+      try { identity = JSON.parse(scopeId.slice(historyScopePrefix.length)); } catch { fail("Invalid historical file scope"); }
+      if (!Array.isArray(identity) || identity.length !== 2) fail("Invalid historical file scope");
+      const value = await this.toolOrigin({ sessionId: identity[0], callId: identity[1] });
+      return { sessionId: identity[0], workspaceRoot: value.binding.workspace, historicalBinding: value.binding };
+    });
   }
   installReferenceRouting() {
     const references = this.host.fileReferences;
@@ -527,7 +571,7 @@ export class RemoteWorkspaces extends TypertRemoteService {
 }
 
 // Native JS decorators keep this plugin on DSH's authenticated Typert RPC carrier.
-for (const method of ["catalog", "deviceInstaller", "deviceInstallerStatus", "deviceInstallerConfirm", "browse", "pick", "get", "probe", "control", "switch", "discardSwitch", "input"]) {
+for (const method of ["catalog", "deviceInstaller", "deviceInstallerStatus", "deviceInstallerConfirm", "browse", "pick", "get", "probe", "control", "switch", "discardSwitch", "input", "toolOrigin"]) {
   Remote(RemoteWorkspaces.prototype[method], { kind: "method", name: method, private: false, static: false, addInitializer: (initializer) => invocationInitializers.push(initializer) });
 }
 

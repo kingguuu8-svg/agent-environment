@@ -16,8 +16,8 @@
 | 文件侧栏与引用菜单切换顺序 | `verify_dsh_files.mjs`，实际客户端组件、原生文件树、引用控制器与 Store、React 渲染器 | 8 项通过 |
 | 远端文件补全与实际引用读取 | `verify_dsh_references.py`，独立 Host、loopback SSH、本地 SSE 模型与真实 Pi 工具 | 10 项通过 |
 | 原生搜索、工具更新与迟到结果 | `verify_workspace_references.mjs`，锁定的 DSH 搜索、实际 MCP worker 与 Host 路由 | 7 项通过 |
-| Pi 结果、图片、并发、取消与重启 | `verify_dsh_pi_results.py`，实际 Host、loopback SSH、本地 SSE 模型与真实 Pi 工具 | 7 项通过 |
-| 实际编辑差异的原生展示 | `verify_dsh_pi_views.mjs`，SSH 验证结果、原生工具行、SlotCore 与 React 渲染器 | 7 项通过 |
+| Pi 结果与跨工作区历史文件预览 | `verify_dsh_pi_results.py`，实际 Host、loopback SSH、本地 SSE 模型与真实 Pi 工具 | 15 项通过 |
+| 原生工具行与历史文件入口 | `verify_dsh_pi_views.mjs`，SSH 验证结果、原生工具行、SlotCore、原生选择器与 React 渲染器 | 10 项通过 |
 | 启动等待、取消与登录恢复 | `verify_dsh_launcher.py`，独立 Host、loopback SSH、真实 Linux 用户服务 | 16 项通过 |
 | 既有 Pi MCP 工具行为 | `verify_local.py`，独立 loopback sshd | 23 项通过 |
 | 既有远端工作区入口 | `verify_workspace_local.py`，两个并行目录与 HTTP MCP | 11 项通过 |
@@ -195,6 +195,22 @@ Host 现在将绑定会话的原生补全请求发送到当前目标 worker，�
 空闲维护仅更新 VPS4 的结果适配模块、Host、客户端和插件清单四份文件，原件与权限记录保留。运行源码哈希与验证版本一致；35 个已有会话的五项投影、绑定和原生日志、7 个工作区分组、机器清单与六份配置保持。26 个原控制者恢复，随机查看者保持只读；云端、桌面与 VPS1 的原生文件列表、引用候选及工具探测通过。部署证据位于 `.local/verification-dsh-pi-results-deployed.json`，备份位于 VPS4 的 `dsh-state/backups/pi-results-*`。按 `manifest.json` 恢复文件与权限、移除此前不存在的适配模块，再重启 Host 即可回滚。
 
 生产原页面只读刷新后，标题、工作区与查看权限保持，目标已连接，输入框为空。生产检查未发送消息、切换工作区或接管输入。
+
+## 历史工具文件来源
+
+2026 年 10 月 8 日，隔离浏览器复现同一会话从 A 切到 B 后，旧编辑行打开 B 的同名文件。新版通过工具调用所属会话与调用编号读取原执行位置，再使用 DSH 原生文件预览；当前会话的默认执行目标保持。成功工具行在来源与当前工作区不同的时候显示执行位置。
+
+`verify_dsh_pi_results.py` 在原有 7 项真实 Pi 检查后增加 8 项历史文件检查。真实 SSH 的读取、写入与编辑结果在切换后仍指向原工作区；文本、stat、PNG 字节与目录内链接均核对实际内容或绝对位置。同机换目录和原生分支保留来源，查看历史不接管输入。未登录、畸形作用域、不存在或失败的调用、非文件调用，以及越界路径和目录外软链接均被拒绝。原目录暂时移走会返回错误，恢复后可继续使用同一作用域；登记的目标身份发生变化也会被拒绝。
+
+兼容验证只改写隔离会话的真实 Pi 日志，分别移除新版来源字段与全部展示元数据，保留独立的 Zstandard 头帧。上版日志使用已有执行详情恢复来源，更早日志按工具分派时的工作区记录恢复。构造持久化待切换记录后，历史预览保持原日志字节和模型请求数；随后显式恢复 Agent 才提交该切换。原生列表可能使用此前的结束摘要，因此这项检查以实际 Agent 恢复结果核对待切换状态。
+
+原生组件检查扩展到 10 项，使用实际 SlotCore、FileMutationRow 与 DSH 的选择器绑定函数。新增检查覆盖所属会话的投影注入、当前与待切换工作区的区别、中文路径的历史文件地址，以及迟到响应、传输失败和业务失败时保持原目标。8 项隔离浏览器与集成检查覆盖同名文件、来源提示、原位置的文件变化、失败与恢复、刷新和重启，以及切回原工作区后的标签更新。模型请求保持 6 次，全部来自准备历史与实际工具轮次，文件验证未发送消息。
+
+上下文与接力 18 项、输入权恢复 7 项、原生文件侧栏 8 项、客户端异常 4 项与多窗口恢复 13 项回归通过。JavaScript 语法、Python lint、格式与 diff 检查通过。证据位于 `.local/verification-dsh-history-files-before.json`、`.local/verification-dsh-history.json` 和 `.local/verification-dsh-history-web.json`；临时服务、目录和浏览器页已清理。
+
+新版仅更新 VPS4 的 Host 与客户端两份文件，原件和权限均有备份。35 个已有会话的五项投影、绑定与原生日志、7 个工作区分组、机器清单和六份配置保持，26 个原控制者恢复，三台机器的原生文件与引用检查通过。另抽查生产历史中的桌面与 VPS1 工具记录，来源与当时的分派绑定一致，原生文件作用域读取原目录，会话当前绑定保持。生产页面刷新后目标已连接，仍处于查看模式，控制台无错误；检查未发送模型请求。部署证据位于 `.local/verification-dsh-history-files-deployed.json`；按 VPS4 `dsh-state/backups/history-files-*` 内的 `manifest.json` 恢复两份文件及权限，再重启 Host 即可回滚。生产验证保持只读。
+
+这轮验证覆盖成功的原生读取、写入和编辑工具行，以及原位置当前文件的预览。普通回复中的 Markdown 文件链接继续使用会话当前工作区；macOS 与 Windows 真机验证仍待完成。
 
 ## 设备安装
 

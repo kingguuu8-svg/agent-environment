@@ -141,6 +141,7 @@ window.__ModuleLoader__.load({
         .rw-button:disabled,.rw-folder:disabled{opacity:.45;cursor:default}.rw-button:focus-visible,.rw-machine:focus-visible,.rw-folder:focus-visible,.rw-shortcut:focus-visible{outline:2px solid #729aff;outline-offset:2px}
         .rw-primary{background:#356be8;color:white;border-color:transparent}.rw-primary:hover{background:#2d5bcc}
         .rw-meta{font-size:12px;color:var(--dsw-alias-label-secondary,#929699);line-height:1.6}.rw-pending{font-size:12px;color:#c68c21;max-width:350px}
+        .rw-tool-origin{font-size:11px;color:var(--dsw-alias-label-tertiary,#929699);padding:0 0 3px 24px;overflow-wrap:anywhere}
         .rw-error{color:var(--dsw-alias-state-danger-primary,#d46161);white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}
         .rw-status{position:fixed;right:24px;bottom:70px;z-index:1100;background:var(--dsw-alias-bg-layer-2,#202124);color:var(--dsw-alias-label-primary,#eee);border:1px solid #80808050;border-radius:12px;padding:13px 16px;display:flex;align-items:center;gap:10px;max-width:min(480px,calc(100vw - 48px));box-shadow:0 8px 24px #0003;font-size:13px;line-height:1.5}
         .rw-dialog{width:720px!important;max-width:100%;max-height:100%;overflow:hidden!important;display:flex!important;flex-direction:column;gap:0!important;padding:24px!important;font-family:inherit;color:var(--dsw-alias-label-primary,#eee)}
@@ -582,28 +583,47 @@ window.__ModuleLoader__.load({
       ctx.slots.inject("conversation.session.header.actions", () => ctx.slots.register({ name: "conversation.session.header.actions", id: "agent-preset", priority: -100 }, () => h(React.Fragment)));
       ctx.slots.inject("conversation.input.permission", () => ctx.slots.register({ name: "conversation.input.permission", id: "remote-tool-permissions", priority: -100 }, () => h("span", { className: "rw-meta", title: "工具使用所选机器登录用户的系统权限。工作区决定相对路径；文件侧栏限定在该目录内。" }, "目标用户权限")));
       ctx.slots.inject("tool.call.toolview", () => {
-        let installed = false, disposeView;
+        const views = new Map();
         const install = () => {
-          if (installed) return;
-          const native = ctx.slots.entriesOfSlot("tool.call.toolview").find((entry) => entry.options.key === "edit");
-          if (!native) return;
-          installed = true;
-          const NativeEdit = native.component;
-          function PiEditView(props) {
-            const block = useMemo(() => {
-              const diff = props.block.meta?.remotePi?.diff;
-              if (props.phase !== "result" || props.block.isError || typeof diff !== "string" || !diff) return props.block;
-              // Show the exact applied Pi diff alongside its original output.
-              // Argument text cannot establish what a fuzzy edit really changed.
-              return { ...props.block, content: [...props.block.content, { type: "text", text: "修改差异：\n" + diff }] };
-            }, [props.block, props.phase]);
-            return h(NativeEdit, { ...props, block });
+          for (const key of ["read", "write", "edit"]) {
+            if (views.has(key)) continue;
+            const native = ctx.slots.entriesOfSlot("tool.call.toolview").find((entry) => entry.options.key === key);
+            if (!native) continue;
+            const NativeFileView = native.component;
+            function PiFileView(props) {
+              const current = props.useToolBinding?.((snapshot) => snapshot?.current);
+              const details = props.block.meta?.remotePi;
+              const origin = details?.origin ?? (details?.remote ? { id: details.workspace, ...details.remote } : null);
+              const block = useMemo(() => {
+                const diff = details?.diff;
+                if (key !== "edit" || props.phase !== "result" || props.block.isError || typeof diff !== "string" || !diff) return props.block;
+                return { ...props.block, content: [...props.block.content, { type: "text", text: "修改差异：\n" + diff }] };
+              }, [props.block, props.phase]);
+              const openFile = props.historySessionId ? async (path, options) => {
+                try {
+                  const value = await api("toolOrigin", { sessionId: props.historySessionId, callId: props.callId });
+                  if (selection.getSnapshot().sessionId !== props.historySessionId) return;
+                  const normalized = path.replace(/\\/g, "/").replace(/^(?:\.\/)+/, "");
+                  const address = `dsh-resource://file/session/${encodeURIComponent(value.scopeId)}/${normalized.split("/").map((part) => encodeURIComponent(part).replace(/%3A/gi, ":")).join("/")}`;
+                  ctx.sidebarRight.openResource(address, options?.line === undefined ? {} : { params: { line: options.line } });
+                  showNotice(`正在查看 ${shortTarget(value.binding)} 的当前文件。`);
+                } catch (error) { showNotice(error.message, "error"); }
+              } : props.openFile;
+              return h(React.Fragment, null,
+                h(NativeFileView, { ...props, block, openFile, cwd: origin?.workspace ?? props.cwd }),
+                props.phase === "result" && !props.block.isError && origin && typeof origin.machine === "string" && typeof origin.workspace === "string" && origin.id !== current?.id ?
+                  h("div", { className: "rw-tool-origin", title: `${origin.machine} · ${origin.workspace}` }, `执行于 ${shortTarget(origin)}`) : null);
+            }
+            // Slot inject binds the actual owning session, including forked and
+            // restored history. A currently selected window is not its identity.
+            views.set(key, ctx.slots.register({ name: "tool.call.toolview", key, priority: -100, locale: native.locale,
+              inject: (sessionId) => ({ historySessionId: sessionId, hooks: { toolBinding: ctx.sessions.binding(sessionId).session.projections.faceOf("remoteBinding") } }),
+            }, PiFileView));
           }
-          disposeView = ctx.slots.register({ name: "tool.call.toolview", key: "edit", priority: -100, locale: native.locale }, PiEditView);
         };
         install();
         const disposeWatch = ctx.slots.subscribe("tool.call.toolview", install);
-        return () => { disposeWatch(); disposeView?.(); };
+        return () => { disposeWatch(); for (const dispose of views.values()) dispose(); };
       });
       for (const seat of ["conversation.hero.workspace.directoryFlow", "sidebar.workspaces.directoryFlow"]) {
         ctx.slots.inject(seat, () => ctx.slots.register({ name: seat, id: "remote-directory", priority: -100 }, WorkspaceDirectoryFlow));

@@ -10,7 +10,11 @@ import subprocess
 import sys
 import tempfile
 import threading
+import urllib.error
+import urllib.request
 import uuid
+from email.parser import BytesParser
+from email.policy import default as email_policy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -45,6 +49,7 @@ def run(args):
                         "IMAGE-READ",
                         "CONCURRENT-",
                         "CANCEL-BASH",
+                        "HISTORY-WRITE",
                     ]
                 )
             )
@@ -72,6 +77,11 @@ def run(args):
                         {
                             "command": 'printf "%s" "$$" > cancel-pid; printf started > cancel-started; sleep 30; printf finished > cancel-finished'
                         },
+                    )
+                elif "HISTORY-WRITE" in case:
+                    name, arguments = (
+                        "write",
+                        {"path": "历史 空格.txt", "content": "REMOTE-WRITE\n"},
                     )
                 elif "CONCURRENT-" in case:
                     arguments = {
@@ -445,6 +455,398 @@ def run(args):
                     assert len(requests) == request_count
                     passed(
                         "Host restart restores the original diff and control without replaying any tool or model request"
+                    )
+
+                    prompt("laptop", "HISTORY-WRITE")
+                    write = results("laptop")[-1]
+                    historical_checks = []
+
+                    def history_passed(name):
+                        historical_checks.append(name)
+                        passed(name)
+
+                    def origin(machine, call_id, session=None, **options):
+                        return api.remote(
+                            "toolOrigin",
+                            {
+                                "sessionId": session or sessions[machine],
+                                "callId": call_id,
+                            },
+                            **options,
+                        )
+
+                    def switch(machine, workspace):
+                        sid, owner = sessions["laptop"], owners["laptop"]
+                        view = api.remote("get", {"sessionId": sid, "clientId": owner})
+                        return api.remote(
+                            "switch",
+                            {
+                                "sessionId": sid,
+                                "clientId": owner,
+                                "epoch": view["control"]["epoch"],
+                                "revision": view["revision"],
+                                "machine": machine,
+                                "workspace": str(workspace),
+                            },
+                        )
+
+                    def read_bytes(scope_id, path, options=None):
+                        endpoint, rpc_id = "workspaceFiles/readBytes", str(uuid.uuid4())
+                        request = urllib.request.Request(
+                            api.origin + "/api/" + endpoint,
+                            data=json.dumps(
+                                {
+                                    "type": "client-request",
+                                    "rpcId": rpc_id,
+                                    "method": endpoint,
+                                    "payload": {
+                                        "args": {
+                                            "workspaceFileScopeId": scope_id,
+                                            "path": path,
+                                            "options": options or {},
+                                        }
+                                    },
+                                }
+                            ).encode(),
+                            headers={
+                                "Content-Type": "application/json",
+                                "Origin": api.origin,
+                            },
+                        )
+                        with api.browser.open(request, timeout=30) as response:
+                            mime = BytesParser(policy=email_policy).parsebytes(
+                                (
+                                    "Content-Type: "
+                                    + response.headers["Content-Type"]
+                                    + "\r\n\r\n"
+                                ).encode()
+                                + response.read()
+                            )
+                        fields = {
+                            part.get_param(
+                                "name", header="content-disposition"
+                            ): part.get_payload(decode=True)
+                            for part in mime.iter_parts()
+                        }
+                        metadata = json.loads(fields.pop("metadata"))
+                        assert metadata["rpcId"] == rpc_id and metadata["result"]["ok"]
+                        (attachment,) = metadata["attachments"]
+                        assert attachment["codec"] == "bytes" and attachment[
+                            "path"
+                        ] == ["data"]
+                        value = metadata["result"]["value"]
+                        assert value["data"] is None
+                        value["data"] = fields.pop(attachment["part"])
+                        assert not fields
+                        return value
+
+                    edit_id = edit["message"]["toolCallId"]
+                    write_id = write["message"]["toolCallId"]
+                    image_id = image["message"]["toolCallId"]
+                    old_binding = details["origin"]
+                    switch("cloud", cloud)
+                    scope = origin("laptop", edit_id)["scopeId"]
+                    view_before = api.remote(
+                        "get",
+                        {"sessionId": sessions["laptop"], "clientId": owners["laptop"]},
+                    )
+                    model_count = len(requests)
+                    assert api.read(sessions["laptop"], "说明 空格.txt")[
+                        "text"
+                    ].splitlines() == ["BEFORE"]
+                    assert api.read(scope, "说明 空格.txt")["text"].splitlines() == [
+                        "AFTER"
+                    ]
+                    assert api.read(
+                        origin("laptop", write_id)["scopeId"], "历史 空格.txt"
+                    )["text"].splitlines() == ["REMOTE-WRITE"]
+                    assert origin("laptop", image_id)["binding"] == old_binding
+                    stat = api.rpc(
+                        "workspaceFiles/stat",
+                        {"workspaceFileScopeId": scope, "path": "说明 空格.txt"},
+                    )
+                    assert stat["absolutePath"] == str(remote / "说明 空格.txt")
+                    binary = read_bytes(
+                        origin("laptop", image_id)["scopeId"], "pixel.png"
+                    )
+                    assert binary["absolutePath"] == str(remote / "pixel.png")
+                    assert binary["data"] == base64.b64decode(PNG)
+                    nested = remote / "nested-history"
+                    nested.mkdir()
+                    (nested / "inside.txt").write_text("ORIGINAL-LINKED-CONTENT\n")
+                    linked = read_bytes(
+                        scope,
+                        "nested-history/inside.txt",
+                        {"baseFile": str(remote / "guide.md")},
+                    )
+                    assert linked["absolutePath"] == str(nested / "inside.txt")
+                    assert linked["data"] == b"ORIGINAL-LINKED-CONTENT\n"
+                    assert (
+                        api.remote(
+                            "get",
+                            {
+                                "sessionId": sessions["laptop"],
+                                "clientId": owners["laptop"],
+                            },
+                        )
+                        == view_before
+                    )
+                    assert len(requests) == model_count
+                    history_passed(
+                        "historical read, write and edit scopes retain the original SSH target after handoff, including native stat and image bytes"
+                    )
+
+                    outside = ssh.target_root / "outside-history"
+                    outside.mkdir()
+                    (outside / "secret.txt").write_text("OUTSIDE\n")
+                    (remote / "outside-link").symlink_to(
+                        outside, target_is_directory=True
+                    )
+                    for path in [
+                        "../outside-history/secret.txt",
+                        str(outside / "secret.txt"),
+                        "outside-link/secret.txt",
+                        str(cloud / "说明 空格.txt"),
+                    ]:
+                        api.rpc(
+                            "workspaceFiles/read",
+                            {"workspaceFileScopeId": scope, "path": path, "range": {}},
+                            rejected=True,
+                        )
+                    for call_id in [
+                        "missing",
+                        failed["message"]["toolCallId"],
+                        results("laptop")[-2]["message"]["toolCallId"],
+                    ]:
+                        origin("laptop", call_id, rejected=True)
+                    origin("laptop", edit_id, session="session-missing", rejected=True)
+                    for invalid in [
+                        "remote-tool-file:{}",
+                        "remote-tool-file:bad",
+                        "remote-tool-file:[null,0]",
+                        'remote-tool-file:["session", "call", "extra"]',
+                    ]:
+                        api.rpc(
+                            "workspaceFiles/read",
+                            {
+                                "workspaceFileScopeId": invalid,
+                                "path": "说明 空格.txt",
+                                "range": {},
+                            },
+                            rejected=True,
+                        )
+                    unauthorized = urllib.request.Request(
+                        api.origin + "/api/remoteWorkspaces/toolOrigin",
+                        data=json.dumps(
+                            {
+                                "type": "client-request",
+                                "rpcId": str(uuid.uuid4()),
+                                "method": "remoteWorkspaces/toolOrigin",
+                                "payload": {
+                                    "args": {
+                                        "request": {
+                                            "sessionId": sessions["laptop"],
+                                            "callId": edit_id,
+                                        }
+                                    }
+                                },
+                            }
+                        ).encode(),
+                        headers={
+                            "Content-Type": "application/json",
+                            "Origin": api.origin,
+                        },
+                    )
+                    try:
+                        urllib.request.build_opener(
+                            urllib.request.ProxyHandler({})
+                        ).open(unauthorized, timeout=10)
+                        raise AssertionError(
+                            "Historical origin accepted without authentication"
+                        )
+                    except urllib.error.HTTPError as error:
+                        assert error.code in [401, 403]
+                    history_passed(
+                        "malformed identities, missing or failed calls, non-file calls and paths outside the original workspace are rejected"
+                    )
+
+                    second = ssh.target_root / "second-project"
+                    second.mkdir()
+                    (second / "说明 空格.txt").write_text("SECOND-PROJECT\n")
+                    switch("laptop", second)
+                    assert api.read(sessions["laptop"], "说明 空格.txt")[
+                        "text"
+                    ].splitlines() == ["SECOND-PROJECT"]
+                    assert api.read(scope, "说明 空格.txt")["text"].splitlines() == [
+                        "AFTER"
+                    ]
+                    fork = api.rpc(
+                        "session/fork", {"request": {"sessionId": sessions["laptop"]}}
+                    )["sessionId"]
+                    fork_scope = origin("laptop", edit_id, session=fork)["scopeId"]
+                    assert api.read(fork_scope, "说明 空格.txt")[
+                        "text"
+                    ].splitlines() == ["AFTER"]
+                    assert api.remote("get", {"sessionId": fork})["control"] is None
+                    history_passed(
+                        "same-machine directory switches and native forks retain each inherited tool's original project without claiming input"
+                    )
+
+                    offline = ssh.target_root / "offline-history"
+                    remote.rename(offline)
+                    try:
+                        api.rpc(
+                            "workspaceFiles/read",
+                            {
+                                "workspaceFileScopeId": scope,
+                                "path": "说明 空格.txt",
+                                "range": {},
+                            },
+                            rejected=True,
+                        )
+                        assert api.read(sessions["laptop"], "说明 空格.txt")[
+                            "text"
+                        ].splitlines() == ["SECOND-PROJECT"]
+                    finally:
+                        offline.rename(remote)
+                    assert api.read(scope, "说明 空格.txt")["text"].splitlines() == [
+                        "AFTER"
+                    ]
+                    history_passed(
+                        "an unavailable original workspace fails without using the current target and recovers on the same identity"
+                    )
+
+                    stop()
+                    api = start()
+                    assert origin("laptop", edit_id)["binding"] == old_binding
+                    assert api.read(scope, "说明 空格.txt")["text"].splitlines() == [
+                        "AFTER"
+                    ]
+                    history_passed(
+                        "cold Host recovery restores historical file origins without replaying model or tools"
+                    )
+
+                    # Re-encode only this disposable fixture's actual log to exercise
+                    # older releases that persisted fewer presentation fields.
+                    stop()
+                    log_path = next(
+                        (home / "sessions").rglob(
+                            sessions["laptop"] + "/session.v4.jsonl.zstd"
+                        )
+                    )
+                    original_log = log_path.read_bytes()
+                    legacy_events = events("laptop")
+
+                    def save_legacy():
+                        header = (json.dumps(legacy_events[0]) + "\n").encode()
+                        data = (
+                            "\n".join(json.dumps(event) for event in legacy_events[1:])
+                            + "\n"
+                        ).encode()
+                        log_path.write_bytes(
+                            subprocess.check_output(["zstd", "-q", "-c"], input=header)
+                            + subprocess.check_output(["zstd", "-q", "-c"], input=data)
+                        )
+
+                    for event in legacy_events:
+                        if event.get("type") == "tool/result":
+                            event["data"].get("meta", {}).get("remotePi", {}).pop(
+                                "origin", None
+                            )
+                    save_legacy()
+                    api = start()
+                    assert origin("laptop", edit_id)["binding"] == old_binding
+                    assert api.read(scope, "说明 空格.txt")["text"].splitlines() == [
+                        "AFTER"
+                    ]
+                    history_passed(
+                        "last-release Pi details recover their original target without rewriting old records"
+                    )
+
+                    stop()
+                    for event in legacy_events:
+                        if event.get("type") == "tool/result":
+                            event["data"].pop("meta", None)
+                    last_switch = next(
+                        event
+                        for event in reversed(legacy_events)
+                        if event.get("type") == "remote/workspace"
+                    )
+                    api_binding = {
+                        "id": "cloud",
+                        "machine": "cloud",
+                        "workspace": str(cloud),
+                    }
+                    legacy_events.append(
+                        {
+                            "type": "remote/workspace",
+                            "seq": legacy_events[-1]["seq"] + 1,
+                            "time": legacy_events[-1]["time"] + 1,
+                            "ignorable": True,
+                            "data": {
+                                **last_switch["data"],
+                                "pending": api_binding,
+                                "revision": last_switch["data"]["revision"] + 1,
+                            },
+                        }
+                    )
+                    save_legacy()
+                    cold_log = log_path.read_bytes()
+                    api = start()
+                    assert api.read(scope, "说明 空格.txt")["text"].splitlines() == [
+                        "AFTER"
+                    ]
+                    assert log_path.read_bytes() == cold_log
+                    # The list can use an older end-seed summary. Activation
+                    # must still commit the persisted pending switch, proving
+                    # the preceding historical preview did not activate it.
+                    activated = api.remote("get", {"sessionId": sessions["laptop"]})
+                    assert activated["current"]["id"] == "cloud", activated["current"]
+                    assert activated["pending"] is None
+                    assert log_path.read_bytes() != cold_log
+                    history_passed(
+                        "pre-metadata history infers origin at dispatch while cold previews preserve a pending workspace switch"
+                    )
+                    stop()
+                    log_path.write_bytes(original_log)
+                    api = start()
+                    assert len(requests) == model_count
+                    stop()
+                    environment_file = state / "environment.json"
+                    original_environment = environment_file.read_bytes()
+                    altered = json.loads(original_environment)
+                    altered[old_binding["id"]]["workspace"] = str(second)
+                    save(environment_file, altered)
+                    api = start()
+                    origin("laptop", edit_id, rejected=True)
+                    api.rpc(
+                        "workspaceFiles/read",
+                        {
+                            "workspaceFileScopeId": scope,
+                            "path": "说明 空格.txt",
+                            "range": {},
+                        },
+                        rejected=True,
+                    )
+                    stop()
+                    environment_file.write_bytes(original_environment)
+                    api = start()
+                    assert api.read(scope, "说明 空格.txt")["text"].splitlines() == [
+                        "AFTER"
+                    ]
+                    assert len(requests) == model_count
+                    history_passed(
+                        "a changed registered target identity is refused, and restoring that identity recovers the same historical scope"
+                    )
+                    save(
+                        ROOT / ".local/verification-dsh-history.json",
+                        {
+                            "checks": historical_checks,
+                            "modelRequestsDuringPreviews": 0,
+                            "legacyLogFixture": "presentation metadata removed from disposable actual Pi log",
+                            "editResult": edit,
+                            "scopeId": scope,
+                        },
                     )
 
                     calls = [
