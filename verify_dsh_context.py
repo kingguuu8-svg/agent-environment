@@ -143,7 +143,35 @@ def run(args):
             instructions.write_text(
                 remote_marker + "\nKeep {{remote-template}} literal.\n"
             )
-            subprocess.run(["git", "init", "--quiet", str(remote)], check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "init",
+                    "--quiet",
+                    "--initial-branch=context-fixture",
+                    str(remote),
+                ],
+                check=True,
+            )
+            subprocess.run(["git", "-C", str(remote), "add", "AGENTS.md"], check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(remote),
+                    "-c",
+                    "user.name=Context fixture",
+                    "-c",
+                    "user.email=context@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "--quiet",
+                    "-m",
+                    "Fixture instructions",
+                ],
+                check=True,
+            )
             configuration = json.loads(fixture.config.read_text())
             configuration["targets"]["slow"] = dict(configuration["targets"]["laptop"])
             fixture.config.write_text(json.dumps(configuration))
@@ -432,6 +460,39 @@ def run(args):
                 passed(
                     "same conversation switch replaces machine, workspace and project instructions"
                 )
+                assert "Current Git state: context-fixture; clean." in second
+                assert f'"root":"{remote}"' not in second
+                for index in range(80):
+                    (
+                        remote / f"status-proof-{index:03}-{'long-name-' * 10}.txt"
+                    ).write_text("new\n")
+                dirty_prompt = prompt()
+                git_section = dirty_prompt.split("Current Git state:", 1)[1].split(
+                    "\n\n", 1
+                )[0]
+                assert "context-fixture; untracked 80." in git_section
+                shown_entries = int(
+                    git_section.split("Showing ", 1)[1].split("/", 1)[0]
+                )
+                assert 0 < shown_entries <= 8
+                assert f"Showing {shown_entries}/80 entries" in git_section
+                assert len(git_section) < 1100
+                raw_git = json.loads((base / "state/environment.json").read_text())[
+                    accepted_handoff["current"]["id"]
+                ]["context"]["git"]
+                assert (
+                    raw_git["status"]
+                    == subprocess.check_output(
+                        ["git", "-C", str(remote), "status", "--short"], text=True
+                    ).rstrip()
+                )
+                assert len(raw_git["status"].splitlines()) == 80
+                assert (
+                    remote_marker in dirty_prompt and cloud_marker not in dirty_prompt
+                )
+                passed(
+                    "actual model requests receive a one-line clean Git state and a bounded fresh summary of a large dirty checkout"
+                )
 
                 remote_pick = api.remote(
                     "pick", {"machine": "laptop", "workspace": str(remote)}
@@ -520,7 +581,7 @@ def run(args):
                             if m["role"] == "assistant"
                         ]
                     )
-                    == 3
+                    == 4
                 )
                 passed(
                     "switching back preserves conversation history and uses the latest binding"
@@ -1001,6 +1062,12 @@ def run(args):
                             "checks": checks,
                             "modelRequests": len(requests),
                             "detachedTimings": detached_timings,
+                            "gitPrompt": {
+                                "dirtyEntries": 80,
+                                "shownEntries": shown_entries,
+                                "dirtyChars": len(git_section),
+                                "rawContextPreserved": True,
+                            },
                             "sessionId": session,
                         },
                         indent=2,

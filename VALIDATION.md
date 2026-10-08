@@ -617,6 +617,23 @@ VPS4 部署保留源码、原生侧栏包文件与权限备份。35 条会话日
 
 证据位于 `.local/verification-dsh-sidebar-host-groups-deployed.json`、`.local/verification-dsh-sidebar-production-ui.json` 与 `.local/verification-dsh-creation-verified.json`。
 
+## Git 上下文摘要
+
+验证命令：
+
+```bash
+node verify_git_context.mjs
+.venv/bin/python verify_dsh_context.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/pnpm/package-manager-store/v11/links/@/npm/11.20.0/61c2e921ea78f7591fa88d88213cbf6ad002cb23f6191f8d2971c6e08712a583/node_modules/npm/bin/npm-cli.js
+```
+
+八项摘要检查覆盖真实 Git 的干净状态、暂存与未暂存重叠、重命名、分离 HEAD 和合并冲突，以及过长路径、读取失败、异常输出和离线缓存。子模块状态与 Windows 路径分隔符通过协议输入验证。状态预览限制八条、800 字符，过长条目整条省略；仓库根目录仅在与工作区不同时展示。完整输入对象保持原值。
+
+25 项隔离原生 Host、真实 loopback SSH 与模型 HTTP 请求检查通过。模拟模型提供商收到 15 次实际请求，干净仓库收到一行摘要；80 条长文件名状态展示六条，Git 段为 847 字符，云端保存的完整状态与实际 Git 输出一致。检查同时覆盖切换后立即刷新、排队输入使用新工作区、项目指令、离线缓存、恢复、取消和共享连接。生产模型没有参与此项验证。
+
+文本长度按字符统计：干净 Git 段从 136 缩至 31，84 条变更的完整 JSON 为 10,040，摘要为 691；模型 token 数量尚未统计。证据位于 `.local/verification-git-context.json` 和 `.local/verification-dsh-context.json`。
+
+VPS4 空闲维护只替换 Host 插件和 Git 摘要模块，原件与权限保留备份。35 条会话日志与投影、27 份输入权、七个工作区分组、云端草稿和原配置保持。三台机器的文件与引用检查通过，运行源码与本地一致，共享环境配置、服务配置和 Caddy 配置的哈希保持，HTTPS 协议入口正常。运行时四份 Git 上下文保留完整状态并使用新的摘要模块；生产验证没有提交模型请求、接管或切换。部署证据位于 `.local/verification-dsh-git-context-deployed.json`。
+
 ## 范围与清理
 
 前述 Pi 终端验证覆盖单用户 Linux、云端直接 SSH 登录目标、Pi 原生工具、工作区上下文、常驻 SDK 会话与额外 HTTP MCP。终端复用 Pi 的主要界面组件，完整 Pi 命令集、文件补全、图片粘贴、远端 skills 与扩展及持久 PTY 仍在后续范围。新设备的反向接入由 DSH 工具桥接连接提供。新提示等待当前任务结束后提交；运行期间可接管、取消和安排工作区切换。实际 NAS 尚未连接。

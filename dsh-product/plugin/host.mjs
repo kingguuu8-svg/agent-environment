@@ -18,6 +18,7 @@ import { Environment, readJson, writeJson } from "../../environment.mjs";
 import { startEnvironmentAccess } from "../../environment-access.mjs";
 import { maxBytes as workspaceFileByteLimit } from "../../workspace-files.mjs";
 import { createPiToolDefinition } from "../pi-tool-result.mjs";
+import { formatGitContext } from "../git-context.mjs";
 
 export const name = "remote-workspaces";
 export const inject = ["agents", "sessions", "sessionController", "sessionProjections", "tools", "systemPrompt", "workspaceFiles", "workspaceRegistry", "fileReferences", "typert", "connection", "attachments"];
@@ -107,7 +108,7 @@ export class RemoteWorkspaces extends TypertRemoteService {
         "Earlier messages and tool results may refer to a previous machine. Recheck files after switching. Never silently fall back to the cloud or another machine when the target is unavailable.",
         "Use the environment tool to inspect or explicitly call other registered machines, cloud workspaces, or MCP services. This does not change the conversation's default workspace.",
         entry.lastError ? `Target connection error: ${entry.lastError}` : "",
-        context?.git ? `${entry.lastError ? "Last known Git state (target unavailable; may be stale)" : "Current Git state"}:\n${JSON.stringify(context.git)}` : "",
+        formatGitContext(context?.git, current.workspace, { stale: Boolean(entry.lastError) }),
         ...(context?.agents_files ?? []).map((file) => `${entry.lastError ? "Last known project instructions" : "Project instructions"} from ${current.machine}:${file.path}:\n${file.content}`),
       ].filter(Boolean).join("\n\n");
     };
