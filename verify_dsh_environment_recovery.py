@@ -1,6 +1,7 @@
 """Exercise shared SSH recovery through actual DSH sessions and model tool calls."""
 
 import argparse
+import concurrent.futures
 import json
 import os
 import signal
@@ -53,7 +54,13 @@ class FixtureModel(BaseHTTPRequestHandler):
                         "command": "printf 'STARTED\\n' > new-started.txt; while [ ! -f allow-new-finish ]; do sleep .1; done; printf 'DONE\\n' > new-finished.txt; cat new-finished.txt"
                     },
                 )
-            elif marker in {"RECOVERY-CLOUD", "RECOVERY-DURING-WAIT"}:
+            elif marker in {
+                "RECOVERY-CLOUD",
+                "RECOVERY-DURING-WAIT",
+                "RECOVERY-PROBE-PEER-FAILURE",
+                "RECOVERY-PROBE-PEER-DEADLINE",
+                "RECOVERY-PROBE-OFFLINE",
+            }:
                 name, arguments = (
                     "environment",
                     {
@@ -71,6 +78,7 @@ class FixtureModel(BaseHTTPRequestHandler):
                     "RECOVERY-LATE",
                     "RECOVERY-AFTER-LATE",
                     "RECOVERY-SAME-CONNECTION",
+                    "RECOVERY-AFTER-PROBE",
                 }
                 name, arguments = "read", {"path": "target-proof.txt"}
             delta = {
@@ -177,6 +185,8 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 const connect = Environment.prototype.connect, hooked = new WeakSet();
 let failedContext = false, heldContext = false;
+const heldProbes = new Set();
+const probeCounts = {};
 async function exists(path) {
   try { await access(path); return true; } catch (error) { if (error.code === "ENOENT") return false; throw error; }
 }
@@ -224,6 +234,39 @@ Environment.prototype.connect = async function(id) {
       return result;
     }
     return context(signal);
+  };
+  const resource = connection.client.readResource.bind(connection.client);
+  connection.client.readResource = async (...args) => {
+    const uri = args[0].uri;
+    if (!uri.startsWith("workspace://files?request=")) return resource(...args);
+    const request = JSON.parse(decodeURIComponent(uri.slice("workspace://files?request=".length)));
+    if (request.op !== "stat" || request.path !== ".") return resource(...args);
+    for (const mode of ["failure", "deadline", "success"]) {
+      if (await exists(join(directory, "arm-probe-" + mode)) && !await exists(join(directory, "release-probe-" + mode))) {
+        probeCounts[mode] = (probeCounts[mode] ?? 0) + 1;
+        await writeFile(join(directory, "probe-counts.json"), JSON.stringify(probeCounts));
+      }
+    }
+    for (const mode of ["failure", "deadline", "success"]) {
+      if (heldProbes.has(mode) || !await exists(join(directory, "arm-probe-" + mode))) continue;
+      heldProbes.add(mode);
+      let result, error;
+      if (mode === "failure") {
+        const pending = resource(args[0], { ...args[1], timeout: 3000 }).catch((fault) => fault);
+        await connection.client.close();
+        error = await pending;
+        assert.equal(error.code, -32000, "probe fault must be an actual SDK closed transport");
+      } else {
+        result = await resource(...args);
+        assert.equal(JSON.parse(result.contents[0].text).absolutePath, target);
+        await connection.client.close();
+      }
+      await writeFile(join(directory, "held-probe-" + mode + ".json"), JSON.stringify({ actualResponse: !!result, code: error?.code }));
+      await wait(join(directory, "release-probe-" + mode));
+      if (error) throw error;
+      return result;
+    }
+    return resource(...args);
   };
   return connection;
 };
@@ -673,6 +716,170 @@ Environment.prototype.connect = async function(id) {
                     "a real native tool after a temporary pause refreshes project facts on the same worker and clears offline availability"
                 )
 
+                for mode in ["failure", "deadline"]:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                        (base / ("arm-probe-" + mode)).touch()
+                        first_probe = pool.submit(
+                            api.remote, "probe", {"target": target_id}
+                        )
+                        second_probe = pool.submit(
+                            api.remote, "probe", {"target": target_id}
+                        )
+                        try:
+                            wait_for(
+                                lambda: (
+                                    base / ("held-probe-" + mode + ".json")
+                                ).exists(),
+                                timeout=10,
+                            )
+                            actual = json.loads(
+                                (base / ("held-probe-" + mode + ".json")).read_text()
+                            )
+                            assert (
+                                actual.get("code") == -32000
+                                if mode == "failure"
+                                else actual["actualResponse"]
+                            )
+                            api.rpc(
+                                "workspaceFiles/read",
+                                {
+                                    "workspaceFileScopeId": sessions["b"],
+                                    "path": "target-proof.txt",
+                                    "range": {},
+                                },
+                                rejected=True,
+                            )
+                            assert api.read(sessions["b"], "target-proof.txt")[
+                                "text"
+                            ].splitlines() == ["RECOVERED-REMOTE"]
+                            (remote / "AGENTS.md").write_text(
+                                "RECOVERED-DURING-PROBE-" + mode + "\n"
+                            )
+                            marker = "RECOVERY-PROBE-PEER-" + mode.upper()
+                            prompt("b", marker)
+                            finished("b", marker)
+                            if mode == "failure":
+                                (base / ("release-probe-" + mode)).touch()
+                            first, second = (
+                                first_probe.result(timeout=16),
+                                second_probe.result(timeout=16),
+                            )
+                            probe_proof = {
+                                "oldProbeUsesCurrentHealth": first["status"]
+                                == second["status"]
+                                == "online",
+                                "bothCallsUseOneProbe": first == second
+                                and json.loads(
+                                    (base / "probe-counts.json").read_text()
+                                )[mode]
+                                == 1,
+                                "replacementStaysOnline": view("b")["connection"][
+                                    "status"
+                                ]
+                                == "online",
+                                "targetReadStillWorks": api.read(
+                                    sessions["b"], "target-proof.txt"
+                                )["text"].splitlines()
+                                == ["RECOVERED-REMOTE"],
+                                "bindingPreserved": view("b")["current"]
+                                == originals["b"]["current"],
+                                "ownershipPreserved": view("b")["control"]["mine"],
+                                "actualNativeResponseOrError": True,
+                            }
+                            save(
+                                ROOT
+                                / (
+                                    ".local/verification-dsh-probe-"
+                                    + mode
+                                    + "-recovery.json"
+                                ),
+                                probe_proof,
+                            )
+                            assert all(probe_proof.values()), (
+                                "a late probe replaced another session's verified current connection state"
+                            )
+                            passed(
+                                "a late actual probe "
+                                + mode
+                                + " preserves another session's restored connection and returns its verified current health to both callers"
+                            )
+                        finally:
+                            (base / ("release-probe-" + mode)).touch()
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    (base / "arm-probe-success").touch()
+                    old_success = pool.submit(
+                        api.remote, "probe", {"target": target_id}
+                    )
+                    moved = remote.with_name(remote.name + " unavailable")
+                    try:
+                        wait_for(
+                            lambda: (base / "held-probe-success.json").exists(),
+                            timeout=10,
+                        )
+                        assert json.loads(
+                            (base / "held-probe-success.json").read_text()
+                        )["actualResponse"]
+                        api.rpc(
+                            "workspaceFiles/read",
+                            {
+                                "workspaceFileScopeId": sessions["a"],
+                                "path": "target-proof.txt",
+                                "range": {},
+                            },
+                            rejected=True,
+                        )
+                        remote.rename(moved)
+                        prompt("b", "RECOVERY-PROBE-OFFLINE")
+                        finished("b", "RECOVERY-PROBE-OFFLINE")
+                        assert "Target connection error" in text(
+                            request_for("RECOVERY-PROBE-OFFLINE", True)["messages"][0][
+                                "content"
+                            ]
+                        )
+                        (base / "release-probe-success").touch()
+                        actual = old_success.result(timeout=16)
+                        probe_proof = {
+                            "oldSuccessReturnsCurrentFailure": actual["status"]
+                            == "unavailable",
+                            "currentFailurePreserved": view("b")["connection"]["status"]
+                            == "unavailable",
+                            "bindingPreserved": view("b")["current"]
+                            == originals["b"]["current"],
+                            "ownershipPreserved": view("b")["control"]["mine"],
+                            "actualOldStatSucceeded": True,
+                        }
+                        save(
+                            ROOT
+                            / ".local/verification-dsh-probe-success-recovery.json",
+                            probe_proof,
+                        )
+                        assert all(probe_proof.values()), (
+                            "a late old probe success cleared the current unavailable workspace's failure"
+                        )
+                        passed(
+                            "a successful old directory probe cannot clear the newer unavailable workspace's error or show it online"
+                        )
+                    finally:
+                        if moved.exists():
+                            moved.rename(remote)
+                        (base / "release-probe-success").touch()
+
+                assert api.remote("probe", {"target": target_id})["status"] == "online"
+                (remote / "AGENTS.md").write_text("LATEST-AFTER-PROBES\n")
+                prompt("a", "RECOVERY-AFTER-PROBE")
+                finished("a", "RECOVERY-AFTER-PROBE")
+                system = text(
+                    request_for("RECOVERY-AFTER-PROBE", True)["messages"][0]["content"]
+                )
+                assert (
+                    "LATEST-AFTER-PROBES" in system
+                    and "Target connection error" not in system
+                )
+                passed(
+                    "a genuine current failure remains visible and the same workspace can recover with fresh project instructions after all late probes"
+                )
+
                 def saved_sessions():
                     fields = [
                         "title",
@@ -701,7 +908,7 @@ Environment.prototype.connect = async function(id) {
                         "text"
                     ].splitlines() == ["RECOVERED-REMOTE"]
                 assert saved_sessions() == saved
-                assert len(FixtureModel.requests) == count == 20
+                assert len(FixtureModel.requests) == count == 28
                 passed(
                     "a real Host restart preserves both histories and controllers; read-only recovery sends no additional model requests"
                 )
@@ -720,6 +927,8 @@ Environment.prototype.connect = async function(id) {
             finally:
                 (base / "release-old").touch()
                 (base / "release-context").touch()
+                for mode in ["failure", "deadline", "success"]:
+                    (base / ("release-probe-" + mode)).touch()
                 (remote / "allow-new-finish").touch()
                 resume_workers()
                 stop()

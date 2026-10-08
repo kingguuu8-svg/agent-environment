@@ -10,7 +10,7 @@
 | 取消、目标离线、进程丢失、Host 重启 | `verify_dsh_recovery.py`，VPS4 与当前电脑，真实模型与实际服务停启 | 7 项通过 |
 | 新 HTTP MCP 的发现与调用 | `verify_dsh_mcp.py`，独立 DSH Host、真实模型、临时 HTTP MCP 服务 | 2 项通过 |
 | 部分 MCP 服务离线与发现恢复 | `verify_mcp_discovery.mjs`，官方 SDK HTTP 服务与共享环境；`verify_dsh_discovery.py`，独立 Host、loopback SSH 与本地 SSE 模型 | 14 项与 5 项通过 |
-| 共享连接恢复与迟到请求隔离 | `verify_environment_recovery.mjs` 与 `.py`，真实 Pi 与 loopback SSH；`verify_dsh_environment_recovery.py`，原生 Host 与本地 SSE 模型 | 本地 10 项、SSH 10 项与 Host 10 项通过 |
+| 共享连接恢复与迟到请求隔离 | `verify_environment_recovery.mjs` 与 `.py`，真实 Pi 与 loopback SSH；`verify_dsh_environment_recovery.py`，原生 Host 与本地 SSE 模型 | 本地 10 项、SSH 10 项与 Host 14 项通过 |
 | 模型请求、环境选择、接力与连接状态 | `verify_dsh_context.py`，独立 Host、loopback SSH、实际 HTTP 录制端点 | 24 项通过 |
 | 输入权持久恢复与分支独立 | `verify_dsh_ownership.py`，独立原生 Host、本地 SSE 模型、两次停启 | 7 项通过 |
 | 客户端发送失败与返回结果 | `verify_dsh_client.mjs`，实际客户端拦截器、loopback HTTP 服务 | 4 项通过 |
@@ -362,6 +362,20 @@ uv run python verify_dsh_environment_recovery.py --node /home/kingguuu8/.local/n
 基线与修正后的请求断言分别保存在 `.local/verification-dsh-context-recovery-before.json`、`.local/verification-dsh-context-deadline-recovery-before.json`、`.local/verification-dsh-same-connection-recovery-before.json` 及对应的无 `-before` 文件。早期故障脚本未等待真实信息请求就关闭连接，改为暂停实际 worker 并断言 SDK 的 `-32000` 错误后取得明确证据。测试暂停的 worker 在清理前恢复，临时 Host、SSH、模型端点与目录已清理。macOS 与 Windows 真机安装仍待验证。
 
 新版已部署到 VPS4，仅替换 `environment.mjs` 和 Host 插件，原件与权限保留备份。35 个会话日志及投影、26 个输入权记录、七个工作区分组、六份配置、机器清单与云端草稿保持；三台机器的文件与引用检查通过。生产页面只读刷新后保留会话、机器、目录与查看权限，目标已连接。生产检查没有提交模型请求、接管或切换，源码哈希与本轮验证文件一致。部署证据位于 `.local/verification-dsh-recovery-status-deployed.json`。
+
+## 目录检查的迟到结果
+
+2026 年 10 月 8 日，实际 SSH 目录检查复现了跨会话状态错误：另一会话重新连接并读取文件后，旧检查的实际 SDK 错误仍将工作环境标为不可用。补充检查还发现旧目录读取成功，但当前目录已不可用时，迟到成功会清掉当前连接错误。两种情况均保持了原会话与输入权，错误发生在可用性记录与网页状态中。
+
+本轮让目录检查记录它实际使用的连接、项目状态和当时的检查结果。另一会话更新这些状态后，旧调用返回当前已确认的状态。正常检查继续读取真实目录；超时保持原 12 秒上限，进行中的重复调用共用同一检查。Host 内部引用沿用现有对象，接口和持久记录格式保持。
+
+`verify_dsh_environment_recovery.py` 扩展至 14 项检查，真实 Host、SSH 与 Pi 工具验证了旧错误、旧超时和旧成功的到达顺序。两个同时发起的检查只发送一条实际目录 RPC，返回同一份当前状态；另一个会话可以继续使用云端工具和当前工作区。真实目录失效保留错误，恢复后同一绑定重新读取最新项目指令。两个会话的控制者、绑定和历史在 Host 重启后保持，28 条模型请求全部来自隔离 SSE 端点。
+
+修改前的迟到错误与补充检查发现的旧成功问题分别记录在 `.local/verification-dsh-probe-failure-recovery-before.json` 与 `.local/verification-dsh-probe-success-recovery-before.json`，修正后的错误、超时与成功结果位于对应的 `verification-dsh-probe-*-recovery.json`。测试延迟实际 SDK 错误或实际目录读取回包，生产代码没有增加调试接口。
+
+八项隔离浏览器断言通过：查看窗口中的恢复目标保持在线，目录失效时旧成功保留当前不可用提示，目录恢复后继续使用原位置；输入权保持查看模式，刷新恢复同一会话。页面未提交模型请求或接管，证据位于 `.local/verification-dsh-probe-recovery-ui.json`。上下文与接力 24 项、输入权七项、历史文件与图片 28 项、实际 Host 服务发现五项回归通过，JavaScript 语法与 Python lint、格式检查通过。临时 Host、SSH、模型端点、目标目录与浏览器页已清理；macOS 和 Windows 真机安装仍待验证。
+
+新版已部署到 VPS4，仅替换 Host 插件并保留原件及权限备份。35 个会话日志与投影、26 个输入权记录、七个工作区分组、六份配置、机器清单和云端草稿保持；三台机器的文件与引用检查通过。原页面只读刷新后保留原会话、机器、目录与查看权限，目标在线。源码哈希与验证版本一致，生产检查没有提交模型请求、接管或切换。部署证据位于 `.local/verification-dsh-probe-recovery-deployed.json`。
 
 ## 设备安装
 

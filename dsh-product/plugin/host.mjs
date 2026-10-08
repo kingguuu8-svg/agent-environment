@@ -319,9 +319,9 @@ export class RemoteWorkspaces extends TypertRemoteService {
   recordConnectionCheck(id, value) {
     this.connectionChecks.set(id, { value, connection: this.environment.connections.get(id), context: this.environment.get(id).context });
   }
-  connectionState(id) {
+  connectionState(id, includePending = true) {
     const checked = this.connectionCheck(id);
-    if (this.checkingConnections.has(id)) return { ...checked, status: "checking" };
+    if (includePending && this.checkingConnections.has(id)) return { ...checked, status: "checking" };
     const error = this.environment.get(id).lastError;
     if (error) return { ...checked, status: "unavailable", error };
     return checked && Date.now() - checked.checkedAt < 65000 ? checked : { status: "unknown" };
@@ -374,24 +374,31 @@ export class RemoteWorkspaces extends TypertRemoteService {
     const check = (async () => {
       const started = Date.now();
       const controller = new AbortController();
-      let timer;
+      const entry = this.environment.get(id);
+      let timer, connection, context = entry.context, lastError, checked, failure;
       try {
         // Check the real directory without executing a model turn, changing a
         // binding, or closing a connection shared by another session.
         await Promise.race([
-          this.fileRequest(id, { op: "stat", path: "." }, controller.signal),
+          this.fileRequest(id, { op: "stat", path: "." }, controller.signal, (active) => {
+            connection = active; context = entry.context; lastError = entry.lastError; checked = this.connectionChecks.get(id);
+          }),
           new Promise((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error("连接检查超时，请稍后重试。")); }, 12000); }),
         ]);
-        const entry = this.environment.get(id);
-        if (entry.lastError) { delete entry.lastError; this.environment.save(); }
-        const result = { status: "online", checkedAt: Date.now(), latencyMs: Date.now() - started };
-        this.recordConnectionCheck(id, result);
-        return result;
       } catch (error) {
-        const result = { status: "unavailable", checkedAt: Date.now(), error: errorMessage(error) };
-        this.recordConnectionCheck(id, result);
-        return result;
+        failure = error;
       } finally { clearTimeout(timer); }
+      // A directory check can finish after another session restores the target.
+      // Return the verified current state; the old result cannot own that cache.
+      const current = this.environment.connections.get(id);
+      if ((current && current !== connection) || (entry.context !== context && (failure || !current))
+        || (connection && (entry.lastError !== lastError || this.connectionChecks.get(id) !== checked))) return this.connectionState(id, false);
+      if (!failure && entry.lastError) { delete entry.lastError; this.environment.save(); }
+      const result = failure
+        ? { status: "unavailable", checkedAt: Date.now(), error: errorMessage(failure) }
+        : { status: "online", checkedAt: Date.now(), latencyMs: Date.now() - started };
+      this.recordConnectionCheck(id, result);
+      return result;
     })();
     this.checkingConnections.set(id, check);
     try { return await check; }
@@ -540,8 +547,10 @@ export class RemoteWorkspaces extends TypertRemoteService {
     const error = this.environment.get(id).lastError;
     if (error) throw new Error(error);
   }
-  async fileRequest(id, request, signal) {
+  async fileRequest(id, request, signal, onConnection) {
     const connection = await this.environment.connect(id);
+    signal?.throwIfAborted();
+    onConnection?.(connection);
     const uri = `workspace://files?request=${encodeURIComponent(JSON.stringify(request))}`;
     try {
       const result = await connection.client.readResource({ uri }, { signal, timeout: 15000 });
