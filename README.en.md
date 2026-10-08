@@ -11,6 +11,8 @@ The optional DSH Web host runs the agent and stores conversations centrally. Ope
 On a Linux host, install Node.js 22.19.0+, Python 3.11+, [uv](https://docs.astral.sh/uv/getting-started/installation/) and the OpenSSH client. From the source directory:
 
 ```bash
+git clone https://github.com/kingguuu8-svg/agent-environment.git
+cd agent-environment
 sh scripts/setup.sh environment
 mkdir -p "$HOME/agent-workspace"
 python3 agent_environment.py init --workspace "$HOME/agent-workspace"

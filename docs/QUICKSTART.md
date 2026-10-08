@@ -6,6 +6,13 @@
 
 Host 需要 Linux、Node.js 22.19.0+、Python 3.11+、uv 和 OpenSSH 客户端。SSH 工作机需要 Node.js 22.19.0+、npm、Python 3.11+，以及可从 Host 使用密钥登录的 SSH 服务。
 
+在 Host 获取源码，后续安装和初始化命令都在这个目录运行：
+
+```bash
+git clone https://github.com/kingguuu8-svg/agent-environment.git
+cd agent-environment
+```
+
 先在 Host 验证登录：
 
 ```bash
