@@ -16,8 +16,9 @@
 | 文件侧栏与引用菜单切换顺序 | `verify_dsh_files.mjs`，实际客户端组件、原生文件树、引用控制器与 Store、React 渲染器 | 8 项通过 |
 | 远端文件补全与实际引用读取 | `verify_dsh_references.py`，独立 Host、loopback SSH、本地 SSE 模型与真实 Pi 工具 | 10 项通过 |
 | 原生搜索、工具更新与迟到结果 | `verify_workspace_references.mjs`，锁定的 DSH 搜索、实际 MCP worker 与 Host 路由 | 7 项通过 |
-| Pi 结果与跨工作区历史文件预览 | `verify_dsh_pi_results.py`，实际 Host、loopback SSH、本地 SSE 模型与真实 Pi 工具 | 15 项通过 |
+| Pi 结果与跨工作区历史文件预览 | `verify_dsh_pi_results.py`，实际 Host、loopback SSH、本地 SSE 模型与真实 Pi 工具 | 21 项通过 |
 | 原生工具行与历史文件入口 | `verify_dsh_pi_views.mjs`，SSH 验证结果、原生工具行、SlotCore、原生选择器与 React 渲染器 | 10 项通过 |
+| 普通回复的文件来源与 Markdown 导航 | `verify_dsh_reply_views.mjs`，原生回复、Markdown 链接与上下文、SlotCore、React 渲染器 | 9 项通过 |
 | 启动等待、取消与登录恢复 | `verify_dsh_launcher.py`，独立 Host、loopback SSH、真实 Linux 用户服务 | 16 项通过 |
 | 既有 Pi MCP 工具行为 | `verify_local.py`，独立 loopback sshd | 23 项通过 |
 | 既有远端工作区入口 | `verify_workspace_local.py`，两个并行目录与 HTTP MCP | 11 项通过 |
@@ -211,6 +212,20 @@ Host 现在将绑定会话的原生补全请求发送到当前目标 worker，�
 新版仅更新 VPS4 的 Host 与客户端两份文件，原件和权限均有备份。35 个已有会话的五项投影、绑定与原生日志、7 个工作区分组、机器清单和六份配置保持，26 个原控制者恢复，三台机器的原生文件与引用检查通过。另抽查生产历史中的桌面与 VPS1 工具记录，来源与当时的分派绑定一致，原生文件作用域读取原目录，会话当前绑定保持。生产页面刷新后目标已连接，仍处于查看模式，控制台无错误；检查未发送模型请求。部署证据位于 `.local/verification-dsh-history-files-deployed.json`；按 VPS4 `dsh-state/backups/history-files-*` 内的 `manifest.json` 恢复两份文件及权限，再重启 Host 即可回滚。生产验证保持只读。
 
 这轮验证覆盖成功的原生读取、写入和编辑工具行，以及原位置当前文件的预览。普通回复中的 Markdown 文件链接继续使用会话当前工作区；macOS 与 Windows 真机验证仍待完成。
+
+## 回复文件来源
+
+2026 年 10 月 8 日，隔离浏览器复现：A 回复中的 `same.txt` 原先读取 `PROJECT-A-FILE`，会话接力到 B 后，同一链接读取了 `PROJECT-B-FILE`。普通 Markdown 链接从原生聊天上下文获取文件入口，与此前已修复的工具行入口不同。
+
+本轮通过所属会话、轮次和生成步骤恢复回复的默认工作区，复用原生文件作用域。客户端在原生回复 Slot 中同时设置 Markdown 上下文与文件提及入口，保留原生回复、外部链接、图片能力和展示设置。DSH 固定网页构建已实现上下文读取函数，但未导出给插件；`frontend-exports.mjs` 校验构建哈希后只增加这项导出，由已有安装补丁应用，重复运行保持幂等，未知构建会被拒绝。
+
+`verify_dsh_pi_results.py` 新增 6 项实际 Host 与 SSH 检查，总计 21 项通过。旧回复与切换后生成的新回复分别读取原工作区的同名文件；同机换目录和原生分支保留各自来源。未登录、畸形作用域、无效步骤、工作区外路径和外部软链接均被拒绝。原目录暂时移走与恢复、登记身份变化与恢复经过实际文件读取验证。冷预览保持待切换记录与日志字节，模型请求数保持；显式恢复 Agent 后才提交待切换状态。
+
+`verify_dsh_reply_views.mjs` 的 9 项检查加载真实原生回复组件、Markdown 链接与上下文及 SlotCore。Node 验证将确定的 Markdown 标记送入原生链接渲染器，检查中文编码路径、驱动器路径、行号、原生文件提及、外部链接与修饰键、流式禁用、中断步骤、迟到响应与失败、图片能力保留、迟注册和卸载恢复，以及固定构建补丁。完整 Markdown 解析在隔离浏览器中验证：旧 A 回复打开 A，新 B 回复打开 B，服务重启后新查看窗口仍可打开旧 A 文件且保持只读。四项浏览器检查通过；准备历史与明确发送 B 工具轮次共使用 10 次本地模型请求，文件预览增加 0 次。
+
+工具行 10 项、文件侧栏 8 项、草稿与窗口恢复 13 项、客户端异常 4 项回归通过，Python lint、格式、JavaScript 语法与 diff 检查通过。证据位于 `.local/verification-dsh-reply-files-before.json`、`.local/verification-dsh-replies.json` 与 `.local/verification-dsh-reply-files-web.json`。回复链接的来源取默认工作区；通过 `environment` 显式访问别处的文件仍需选择对应位置查看。内嵌图片沿用原生图片能力；macOS、Windows 真机验证仍待完成。
+
+新版在 VPS4 空闲时备份并更新 Host、客户端、安装补丁、接口导出模块及生成后的网页脚本五份文件。35 个原生会话日志与五项投影、7 个工作区分组、六份配置和机器清单保持，26 个原控制者恢复，三台机器的文件与引用检查通过。生产历史回复的来源与目录按实际生成步骤核对，桌面与 VPS1 的原生文本读取通过，会话状态逐项保持。原页面刷新后目标在线、查看权限保留，未出现新的界面错误。原件、文件权限和新增文件清单保存在 `dsh-state/backups/reply-files-*`；回滚时按 `manifest.json` 恢复全部文件与权限、移除原先不存在的模块，再重启 Host。部署证据位于 `.local/verification-dsh-reply-files-deployed.json`，生产验证保持只读；临时 Host、SSH 工作区、代理与测试页面已清理。
 
 ## 设备安装
 

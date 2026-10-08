@@ -50,6 +50,7 @@ def run(args):
                         "CONCURRENT-",
                         "CANCEL-BASH",
                         "HISTORY-WRITE",
+                        "REPLY-LINK",
                     ]
                 )
             )
@@ -57,8 +58,14 @@ def run(args):
             finished = any(
                 message["role"] == "tool" for message in messages[latest + 1 :]
             )
-            if finished:
-                delta, finish = {"role": "assistant", "content": "PI-RESULT-OK"}, "stop"
+            if finished or "REPLY-LINK" in case:
+                delta, finish = (
+                    {
+                        "role": "assistant",
+                        "content": "PI-RESULT-OK. [说明](%E8%AF%B4%E6%98%8E%20%E7%A9%BA%E6%A0%BC.txt#L1)",
+                    },
+                    "stop",
+                )
             else:
                 name, arguments = (
                     "edit",
@@ -459,7 +466,29 @@ def run(args):
 
                     prompt("laptop", "HISTORY-WRITE")
                     write = results("laptop")[-1]
+                    reply_a = next(
+                        event["data"]
+                        for event in reversed(events("laptop"))
+                        if event.get("type") == "assistant/message"
+                        and event.get("surfaceOp") == "append"
+                    )
                     historical_checks = []
+                    reply_checks = []
+
+                    def reply_passed(name):
+                        reply_checks.append(name)
+                        passed(name)
+
+                    def reply_origin(data=reply_a, session=None, **options):
+                        return api.remote(
+                            "replyOrigin",
+                            {
+                                "sessionId": session or sessions["laptop"],
+                                "turn": data["turn"],
+                                "step": data["step"],
+                            },
+                            **options,
+                        )
 
                     def history_passed(name):
                         historical_checks.append(name)
@@ -545,6 +574,15 @@ def run(args):
                     image_id = image["message"]["toolCallId"]
                     old_binding = details["origin"]
                     switch("cloud", cloud)
+                    prompt("laptop", "REPLY-LINK")
+                    reply_b = next(
+                        event["data"]
+                        for event in reversed(events("laptop"))
+                        if event.get("type") == "assistant/message"
+                        and event.get("surfaceOp") == "append"
+                    )
+                    reply_scope = reply_origin()["scopeId"]
+                    new_reply_scope = reply_origin(reply_b)["scopeId"]
                     scope = origin("laptop", edit_id)["scopeId"]
                     view_before = api.remote(
                         "get",
@@ -592,6 +630,36 @@ def run(args):
                         == view_before
                     )
                     assert len(requests) == model_count
+                    assert reply_origin()["binding"] == old_binding
+                    assert reply_origin(reply_b)["binding"]["machine"] == "cloud"
+                    assert api.read(reply_scope, "说明 空格.txt")[
+                        "text"
+                    ].splitlines() == ["AFTER"]
+                    assert api.read(new_reply_scope, "说明 空格.txt")[
+                        "text"
+                    ].splitlines() == ["BEFORE"]
+                    assert (
+                        read_bytes(
+                            reply_scope,
+                            "nested-history/inside.txt",
+                            {"baseFile": str(remote / "guide.md")},
+                        )["data"]
+                        == b"ORIGINAL-LINKED-CONTENT\n"
+                    )
+                    assert (
+                        api.remote(
+                            "get",
+                            {
+                                "sessionId": sessions["laptop"],
+                                "clientId": owners["laptop"],
+                            },
+                        )
+                        == view_before
+                    )
+                    assert len(requests) == model_count
+                    reply_passed(
+                        "old and new replies independently preserve their generation workspace after handoff, using native files without changing binding, controller or model requests"
+                    )
                     history_passed(
                         "historical read, write and edit scopes retain the original SSH target after handoff, including native stat and image bytes"
                     )
@@ -608,11 +676,16 @@ def run(args):
                         "outside-link/secret.txt",
                         str(cloud / "说明 空格.txt"),
                     ]:
-                        api.rpc(
-                            "workspaceFiles/read",
-                            {"workspaceFileScopeId": scope, "path": path, "range": {}},
-                            rejected=True,
-                        )
+                        for checked_scope in [scope, reply_scope]:
+                            api.rpc(
+                                "workspaceFiles/read",
+                                {
+                                    "workspaceFileScopeId": checked_scope,
+                                    "path": path,
+                                    "range": {},
+                                },
+                                rejected=True,
+                            )
                     for call_id in [
                         "missing",
                         failed["message"]["toolCallId"],
@@ -621,10 +694,34 @@ def run(args):
                         origin("laptop", call_id, rejected=True)
                     origin("laptop", edit_id, session="session-missing", rejected=True)
                     for invalid in [
+                        {"turn": -1},
+                        {"turn": "1"},
+                        {"step": None},
+                        {"step": 2**53},
+                        {"turn": 9999},
+                        {"sessionId": ""},
+                        {"sessionId": "session-missing"},
+                    ]:
+                        api.remote(
+                            "replyOrigin",
+                            {
+                                "sessionId": sessions["laptop"],
+                                "turn": reply_a["turn"],
+                                "step": reply_a["step"],
+                                **invalid,
+                            },
+                            rejected=True,
+                        )
+                    for invalid in [
                         "remote-tool-file:{}",
                         "remote-tool-file:bad",
                         "remote-tool-file:[null,0]",
                         'remote-tool-file:["session", "call", "extra"]',
+                        "remote-reply-file:bad",
+                        "remote-reply-file:{}",
+                        "remote-reply-file:[null,1,1]",
+                        'remote-reply-file:["session",1]',
+                        'remote-reply-file:["session",1,1,"extra"]',
                     ]:
                         api.rpc(
                             "workspaceFiles/read",
@@ -666,6 +763,41 @@ def run(args):
                         )
                     except urllib.error.HTTPError as error:
                         assert error.code in [401, 403]
+                    unauthorized_reply = urllib.request.Request(
+                        api.origin + "/api/remoteWorkspaces/replyOrigin",
+                        data=json.dumps(
+                            {
+                                "type": "client-request",
+                                "rpcId": str(uuid.uuid4()),
+                                "method": "remoteWorkspaces/replyOrigin",
+                                "payload": {
+                                    "args": {
+                                        "request": {
+                                            "sessionId": sessions["laptop"],
+                                            "turn": reply_a["turn"],
+                                            "step": reply_a["step"],
+                                        }
+                                    }
+                                },
+                            }
+                        ).encode(),
+                        headers={
+                            "Content-Type": "application/json",
+                            "Origin": api.origin,
+                        },
+                    )
+                    try:
+                        urllib.request.build_opener(
+                            urllib.request.ProxyHandler({})
+                        ).open(unauthorized_reply, timeout=10)
+                        raise AssertionError(
+                            "Reply origin accepted without authentication"
+                        )
+                    except urllib.error.HTTPError as error:
+                        assert error.code in [401, 403]
+                    reply_passed(
+                        "invalid or missing replies, unauthenticated reads and paths outside the original reply workspace are refused"
+                    )
                     history_passed(
                         "malformed identities, missing or failed calls, non-file calls and paths outside the original workspace are rejected"
                     )
@@ -688,6 +820,17 @@ def run(args):
                         "text"
                     ].splitlines() == ["AFTER"]
                     assert api.remote("get", {"sessionId": fork})["control"] is None
+                    for data, marker in [(reply_a, "AFTER"), (reply_b, "BEFORE")]:
+                        assert api.read(reply_origin(data)["scopeId"], "说明 空格.txt")[
+                            "text"
+                        ].splitlines() == [marker]
+                        assert api.read(
+                            reply_origin(data, session=fork)["scopeId"], "说明 空格.txt"
+                        )["text"].splitlines() == [marker]
+                    assert api.remote("get", {"sessionId": fork})["control"] is None
+                    reply_passed(
+                        "same-device directory changes and native forks retain each reply's original project while fork input stays unclaimed"
+                    )
                     history_passed(
                         "same-machine directory switches and native forks retain each inherited tool's original project without claiming input"
                     )
@@ -707,6 +850,18 @@ def run(args):
                         assert api.read(sessions["laptop"], "说明 空格.txt")[
                             "text"
                         ].splitlines() == ["SECOND-PROJECT"]
+                        api.rpc(
+                            "workspaceFiles/read",
+                            {
+                                "workspaceFileScopeId": reply_scope,
+                                "path": "说明 空格.txt",
+                                "range": {},
+                            },
+                            rejected=True,
+                        )
+                        assert api.read(new_reply_scope, "说明 空格.txt")[
+                            "text"
+                        ].splitlines() == ["BEFORE"]
                     finally:
                         offline.rename(remote)
                     assert api.read(scope, "说明 空格.txt")["text"].splitlines() == [
@@ -714,6 +869,12 @@ def run(args):
                     ]
                     history_passed(
                         "an unavailable original workspace fails without using the current target and recovers on the same identity"
+                    )
+                    assert api.read(reply_scope, "说明 空格.txt")[
+                        "text"
+                    ].splitlines() == ["AFTER"]
+                    reply_passed(
+                        "an unavailable reply workspace fails without falling back, other replies remain usable and restoration recovers the same link"
                     )
 
                     stop()
@@ -725,6 +886,13 @@ def run(args):
                     history_passed(
                         "cold Host recovery restores historical file origins without replaying model or tools"
                     )
+                    assert api.read(reply_scope, "说明 空格.txt")[
+                        "text"
+                    ].splitlines() == ["AFTER"]
+                    assert api.read(new_reply_scope, "说明 空格.txt")[
+                        "text"
+                    ].splitlines() == ["BEFORE"]
+                    assert len(requests) == model_count
 
                     # Re-encode only this disposable fixture's actual log to exercise
                     # older releases that persisted fewer presentation fields.
@@ -797,6 +965,16 @@ def run(args):
                         "AFTER"
                     ]
                     assert log_path.read_bytes() == cold_log
+                    assert api.read(reply_scope, "说明 空格.txt")[
+                        "text"
+                    ].splitlines() == ["AFTER"]
+                    assert api.read(new_reply_scope, "说明 空格.txt")[
+                        "text"
+                    ].splitlines() == ["BEFORE"]
+                    assert log_path.read_bytes() == cold_log
+                    reply_passed(
+                        "cold reply previews recover from durable steps and leave pending switches and session log bytes untouched"
+                    )
                     # The list can use an older end-seed summary. Activation
                     # must still commit the persisted pending switch, proving
                     # the preceding historical preview did not activate it.
@@ -819,6 +997,16 @@ def run(args):
                     save(environment_file, altered)
                     api = start()
                     origin("laptop", edit_id, rejected=True)
+                    reply_origin(rejected=True)
+                    api.rpc(
+                        "workspaceFiles/read",
+                        {
+                            "workspaceFileScopeId": reply_scope,
+                            "path": "说明 空格.txt",
+                            "range": {},
+                        },
+                        rejected=True,
+                    )
                     api.rpc(
                         "workspaceFiles/read",
                         {
@@ -837,6 +1025,23 @@ def run(args):
                     assert len(requests) == model_count
                     history_passed(
                         "a changed registered target identity is refused, and restoring that identity recovers the same historical scope"
+                    )
+                    assert api.read(reply_scope, "说明 空格.txt")[
+                        "text"
+                    ].splitlines() == ["AFTER"]
+                    reply_passed(
+                        "changed target identity is refused for replies and restoration recovers the original scope"
+                    )
+                    save(
+                        ROOT / ".local/verification-dsh-replies.json",
+                        {
+                            "checks": reply_checks,
+                            "modelRequestsDuringPreviews": 0,
+                            "replyA": reply_a,
+                            "replyB": reply_b,
+                            "bindingA": old_binding,
+                            "scopeId": reply_scope,
+                        },
                     )
                     save(
                         ROOT / ".local/verification-dsh-history.json",

@@ -2,7 +2,7 @@ window.__ModuleLoader__.load({
   id: "remote-dsh-workspaces",
   factory: (require) => {
     const React = require("react");
-    const { Modal } = require("@deepseek-ai/dsh-client-ui-primitives");
+    const { Modal, MarkdownDelegateProvider, useMarkdownDelegate } = require("@deepseek-ai/dsh-client-ui-primitives");
     const h = React.createElement;
     const { useState, useEffect, useRef, useMemo, useSyncExternalStore } = React;
     const inject = ["connection", "sessions", "workspaces", "slots", "uiWorkspace", "layout", "sidebarRight", "inputTriggers"];
@@ -582,6 +582,41 @@ window.__ModuleLoader__.load({
       // actual execution binding through the same environment entry everywhere.
       ctx.slots.inject("conversation.session.header.actions", () => ctx.slots.register({ name: "conversation.session.header.actions", id: "agent-preset", priority: -100 }, () => h(React.Fragment)));
       ctx.slots.inject("conversation.input.permission", () => ctx.slots.register({ name: "conversation.input.permission", id: "remote-tool-permissions", priority: -100 }, () => h("span", { className: "rw-meta", title: "工具使用所选机器登录用户的系统权限。工作区决定相对路径；文件侧栏限定在该目录内。" }, "目标用户权限")));
+      const openHistoricalFile = async (method, identity, path, options) => {
+        try {
+          const value = await api(method, identity);
+          if (selection.getSnapshot().sessionId !== identity.sessionId) return;
+          const normalized = path.replace(/\\/g, "/").replace(/^(?:\.\/)+/, "");
+          const address = `dsh-resource://file/session/${encodeURIComponent(value.scopeId)}/${normalized.split("/").map((part) => encodeURIComponent(part).replace(/%3A/gi, ":")).join("/")}`;
+          ctx.sidebarRight.openResource(address, options?.line === undefined ? {} : { params: { line: options.line } });
+          showNotice(`正在查看 ${shortTarget(value.binding)} 的当前文件。`);
+        } catch (error) { showNotice(error.message, "error"); }
+      };
+      ctx.slots.inject("conversation.chat.node", () => {
+        let disposeView;
+        const install = () => {
+          if (disposeView) return;
+          const native = ctx.slots.entriesOfSlot("conversation.chat.node").find((entry) => entry.options.key === "assistant-step");
+          if (!native) return;
+          const NativeAssistant = native.component;
+          function HistoricalAssistant(props) {
+            const parent = useMarkdownDelegate();
+            const { turn, step } = props.node.data;
+            const openFile = useMemo(() => props.historySessionId ? (path, options) =>
+              openHistoricalFile("replyOrigin", { sessionId: props.historySessionId, turn, step }, path, options) : props.openFile,
+            [props.historySessionId, turn, step, props.openFile]);
+            // Native Markdown links read context; prose file mentions use the
+            // prop. Preserve the parent's external-link and image capabilities.
+            return h(MarkdownDelegateProvider, { ...parent, openFile }, h(NativeAssistant, { ...props, openFile }));
+          }
+          disposeView = ctx.slots.register({ name: "conversation.chat.node", key: "assistant-step", priority: -100, locale: native.locale,
+            inject: (sessionId) => ({ ...native.inject?.(sessionId), historySessionId: sessionId }),
+          }, HistoricalAssistant);
+        };
+        install();
+        const disposeWatch = ctx.slots.subscribe("conversation.chat.node", install);
+        return () => { disposeWatch(); disposeView?.(); };
+      });
       ctx.slots.inject("tool.call.toolview", () => {
         const views = new Map();
         const install = () => {
@@ -599,16 +634,8 @@ window.__ModuleLoader__.load({
                 if (key !== "edit" || props.phase !== "result" || props.block.isError || typeof diff !== "string" || !diff) return props.block;
                 return { ...props.block, content: [...props.block.content, { type: "text", text: "修改差异：\n" + diff }] };
               }, [props.block, props.phase]);
-              const openFile = props.historySessionId ? async (path, options) => {
-                try {
-                  const value = await api("toolOrigin", { sessionId: props.historySessionId, callId: props.callId });
-                  if (selection.getSnapshot().sessionId !== props.historySessionId) return;
-                  const normalized = path.replace(/\\/g, "/").replace(/^(?:\.\/)+/, "");
-                  const address = `dsh-resource://file/session/${encodeURIComponent(value.scopeId)}/${normalized.split("/").map((part) => encodeURIComponent(part).replace(/%3A/gi, ":")).join("/")}`;
-                  ctx.sidebarRight.openResource(address, options?.line === undefined ? {} : { params: { line: options.line } });
-                  showNotice(`正在查看 ${shortTarget(value.binding)} 的当前文件。`);
-                } catch (error) { showNotice(error.message, "error"); }
-              } : props.openFile;
+              const openFile = props.historySessionId ? (path, options) =>
+                openHistoricalFile("toolOrigin", { sessionId: props.historySessionId, callId: props.callId }, path, options) : props.openFile;
               return h(React.Fragment, null,
                 h(NativeFileView, { ...props, block, openFile, cwd: origin?.workspace ?? props.cwd }),
                 props.phase === "result" && !props.block.isError && origin && typeof origin.machine === "string" && typeof origin.workspace === "string" && origin.id !== current?.id ?

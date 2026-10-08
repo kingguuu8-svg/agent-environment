@@ -26,6 +26,7 @@ const projectionSchema = schema.object({ current: bindingSchema.nullable(), pend
 const invocationInitializers = [];
 const execute = promisify(execFile);
 const historyScopePrefix = "remote-tool-file:";
+const replyScopePrefix = "remote-reply-file:";
 const fileToolNames = new Set(["read", "write", "edit"]);
 
 function fail(message) { throw new RemoteError("gateway/bad-request", message, {}); }
@@ -478,22 +479,49 @@ export class RemoteWorkspaces extends TypertRemoteService {
     const details = result?.meta?.remotePi;
     if (details?.origin) origin = details.origin;
     else if (details?.workspace && details.remote) origin = { id: details.workspace, machine: details.remote.machine, workspace: details.remote.workspace };
+    return this.historicalFileOrigin(origin, historyScopePrefix + JSON.stringify([request.sessionId, request.callId]));
+  }
+  async replyOrigin(request, signal) {
+    checkRequest(request);
+    if (typeof request.sessionId !== "string" || !request.sessionId || request.sessionId.length > 1024 ||
+        ![request.turn, request.step].every((value) => Number.isSafeInteger(value) && value >= 0)) fail("Invalid reply file identity");
+    const inspection = await this.host.sessionController.inspect(request.sessionId, signal);
+    let current = this.anchors[inspection.meta.cwd] ?? (inspection.meta.cwd === this.environment.get("cloud").workspace ? this.binding("cloud") : null);
+    let started = false, hasReply = false, origin;
+    for (const event of inspection.events) {
+      if (event.type === eventType) current = event.data.current;
+      else if (event.type === handoffEventType) current = event.data.binding.current;
+      else if (event.data?.turn === request.turn && event.data?.step === request.step) {
+        if (event.type === "step/start") {
+          if (started) fail("Ambiguous historical reply identity");
+          started = true; origin = current;
+        } else if (event.type === "assistant/live-chunk" || event.type === "assistant/message" && event.surfaceOp === "append") hasReply = true;
+      }
+    }
+    // The step's default workspace is authoritative for relative reply links,
+    // even if that step explicitly called another target through environment.
+    if (!started || !hasReply) fail("This history entry has no reply file preview");
+    return this.historicalFileOrigin(origin, replyScopePrefix + JSON.stringify([request.sessionId, request.turn, request.step]));
+  }
+  historicalFileOrigin(origin, scopeId) {
     const parsed = bindingSchema.safeParse(origin);
     if (!parsed.success) fail("The original workspace is unavailable for this history entry");
     const entry = this.environment.get(parsed.data.id);
     if (entry.kind === "mcp" || entry.machine !== parsed.data.machine || entry.workspace !== parsed.data.workspace) fail("The original workspace identity has changed");
     return { binding: { ...parsed.data, hostname: parsed.data.hostname ?? entry.context?.hostname ?? parsed.data.machine },
-      scopeId: historyScopePrefix + JSON.stringify([request.sessionId, request.callId]) };
+      scopeId };
   }
   installHistoricalFileScopes() {
     const native = this.host.typert.lookups.get("workspaceFileScope");
     if (!native) throw new Error("The native workspace file scope is unavailable");
     this.host.typert.lookups.configure("workspaceFileScope", async (scopeId) => {
-      if (typeof scopeId !== "string" || !scopeId.startsWith(historyScopePrefix)) return native.resolve(scopeId);
+      const isReply = typeof scopeId === "string" && scopeId.startsWith(replyScopePrefix);
+      if (!isReply && (typeof scopeId !== "string" || !scopeId.startsWith(historyScopePrefix))) return native.resolve(scopeId);
       let identity;
-      try { identity = JSON.parse(scopeId.slice(historyScopePrefix.length)); } catch { fail("Invalid historical file scope"); }
-      if (!Array.isArray(identity) || identity.length !== 2) fail("Invalid historical file scope");
-      const value = await this.toolOrigin({ sessionId: identity[0], callId: identity[1] });
+      try { identity = JSON.parse(scopeId.slice(isReply ? replyScopePrefix.length : historyScopePrefix.length)); } catch { fail("Invalid historical file scope"); }
+      if (!Array.isArray(identity) || identity.length !== (isReply ? 3 : 2)) fail("Invalid historical file scope");
+      const value = isReply ? await this.replyOrigin({ sessionId: identity[0], turn: identity[1], step: identity[2] }) :
+        await this.toolOrigin({ sessionId: identity[0], callId: identity[1] });
       return { sessionId: identity[0], workspaceRoot: value.binding.workspace, historicalBinding: value.binding };
     });
   }
@@ -571,7 +599,7 @@ export class RemoteWorkspaces extends TypertRemoteService {
 }
 
 // Native JS decorators keep this plugin on DSH's authenticated Typert RPC carrier.
-for (const method of ["catalog", "deviceInstaller", "deviceInstallerStatus", "deviceInstallerConfirm", "browse", "pick", "get", "probe", "control", "switch", "discardSwitch", "input", "toolOrigin"]) {
+for (const method of ["catalog", "deviceInstaller", "deviceInstallerStatus", "deviceInstallerConfirm", "browse", "pick", "get", "probe", "control", "switch", "discardSwitch", "input", "toolOrigin", "replyOrigin"]) {
   Remote(RemoteWorkspaces.prototype[method], { kind: "method", name: method, private: false, static: false, addInitializer: (initializer) => invocationInitializers.push(initializer) });
 }
 
