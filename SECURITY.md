@@ -16,6 +16,6 @@ Other agents may operate on the same files or processes. Each call names an expl
 
 ## Reporting
 
-Once this repository is hosted on GitHub, use its private vulnerability reporting feature for sensitive findings. Until a private reporting channel is configured, public issues should contain only a redacted description and a request for private contact. Avoid attaching keys, installer payloads, launch URLs, session transcripts or private host configuration.
+Report sensitive findings through [GitHub private vulnerability reporting](https://github.com/kingguuu8-svg/agent-environment/security/advisories/new). Avoid attaching keys, installer payloads, launch URLs, session transcripts or private host configuration.
 
 Include the affected version, operating systems, minimal reproduction using synthetic data, and the expected access boundary. General connection or installation failures can use the regular bug template after removing private information.

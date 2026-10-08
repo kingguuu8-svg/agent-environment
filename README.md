@@ -17,7 +17,7 @@
 
 ## 开始使用
 
-在 Linux 服务器或开发机准备 Node.js 22.19.0+、Python 3.11+、[uv](https://docs.astral.sh/uv/getting-started/installation/) 和 OpenSSH 客户端，然后在源码目录运行：
+在 Linux 服务器或开发机准备 Node.js 22.19.0+、Python 3.11+、[uv](https://docs.astral.sh/uv/getting-started/installation/) 和 OpenSSH 客户端，然后获取源码并启动环境：
 
 ```bash
 git clone https://github.com/kingguuu8-svg/agent-environment.git
