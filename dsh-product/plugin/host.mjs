@@ -13,11 +13,13 @@ import { basename, dirname, isAbsolute, join, relative, resolve, win32 } from "n
 import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import lockfile from "proper-lockfile";
+import mime from "mime-types";
 import { Environment, readJson, writeJson } from "../../environment.mjs";
+import { maxBytes as workspaceFileByteLimit } from "../../workspace-files.mjs";
 import { createPiToolDefinition } from "../pi-tool-result.mjs";
 
 export const name = "remote-workspaces";
-export const inject = ["agents", "sessions", "sessionController", "sessionProjections", "tools", "systemPrompt", "workspaceFiles", "workspaceRegistry", "fileReferences", "typert"];
+export const inject = ["agents", "sessions", "sessionController", "sessionProjections", "tools", "systemPrompt", "workspaceFiles", "workspaceRegistry", "fileReferences", "typert", "connection", "attachments"];
 export const Config = z.object({ stateDir: z.string().required(), targets: z.string().required(), python: z.string().required(), cloudWorkspace: z.string().required() });
 const eventType = "remote/workspace";
 const handoffEventType = "remote/handoff";
@@ -139,6 +141,7 @@ export class RemoteWorkspaces extends TypertRemoteService {
     }));
     this.installFileRouting();
     this.installHistoricalFileScopes();
+    this.installReplyImages();
     this.installReferenceRouting();
     this.installInputGuard();
   }
@@ -524,6 +527,37 @@ export class RemoteWorkspaces extends TypertRemoteService {
         await this.toolOrigin({ sessionId: identity[0], callId: identity[1] });
       return { sessionId: identity[0], workspaceRoot: value.binding.workspace, historicalBinding: value.binding };
     });
+  }
+  installReplyImages() {
+    // Register inside DSH's authenticated carrier, sharing the same cold reply
+    // origin and bounded read-only target files as the native preview sidebar.
+    this.host.effect(() => this.host.connection.fetch.register({
+      path: "/api/remote-reply-image", methods: ["GET", "HEAD"], requestBody: "buffered",
+      fetch: async (request) => {
+        const headers = { "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox; default-src 'none'" };
+        const failure = (status, message) => new Response(request.method === "HEAD" ? null : message, { status, headers });
+        const query = new URL(request.url).searchParams;
+        const path = query.get("path");
+        let identity;
+        try { identity = JSON.parse(query.get("reply")); } catch { return failure(400, "Invalid reply image identity"); }
+        if (!Array.isArray(identity) || identity.length !== 3 || !path || path.length > 16384 || path.includes("\0")) return failure(400, "Invalid reply image request");
+        try {
+          const value = await this.replyOrigin({ sessionId: identity[0], turn: identity[1], step: identity[2] }, request.signal);
+          const scope = { sessionId: identity[0], workspaceRoot: value.binding.workspace, historicalBinding: value.binding };
+          const limit = Math.min(workspaceFileByteLimit, this.host.attachments.imageLimits.maxImageBytes);
+          const info = await this.routeFile(scope, path, { op: "stat" }, request.signal);
+          if (info.type !== "file") return failure(403, "Image preview requires a regular file");
+          if (info.bytes > limit) return failure(413, "Image exceeds preview byte limit");
+          headers["Content-Type"] = mime.lookup(info.absolutePath) || "application/octet-stream";
+          if (request.method === "HEAD") { headers["Content-Length"] = String(info.bytes); return new Response(null, { headers }); }
+          const result = await this.routeFile(scope, path, { op: "bytes", length: limit }, request.signal);
+          if (!result.eof || result.bytes > limit) return failure(413, "Image exceeds preview byte limit");
+          const bytes = Buffer.from(result.base64, "base64");
+          headers["Content-Length"] = String(bytes.byteLength);
+          return new Response(bytes, { headers });
+        } catch { return failure(request.signal.aborted ? 499 : 404, "The original reply image is unavailable"); }
+      },
+    }), "remote: reply images");
   }
   installReferenceRouting() {
     const references = this.host.fileReferences;

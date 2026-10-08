@@ -176,9 +176,26 @@ try {
   passed("late replies after selecting another conversation and business or transport errors cannot open the current target as a fallback");
 
   await act(async () => { root.update(render({ node: { ...props.node, data: { ...props.node.data, blocks: [{ kind: "text", text: "![picture](pixel.png)" }] } } })); });
-  assert.ok(images.includes("pixel.png"));
-  assert.ok(root.root.findAllByType("img").some((item) => item.props.src === "http://127.0.0.1:1/image.png"));
-  passed("the native image capability survives the nested provider alongside file and external navigation");
+  const localImage = root.root.findByType("img");
+  const localUrl = new URL(localImage.props.src);
+  assert.equal(localUrl.pathname, "/api/remote-reply-image");
+  assert.deepEqual(JSON.parse(localUrl.searchParams.get("reply")), [sessionId, report.replyA.turn, report.replyA.step]);
+  assert.equal(localUrl.searchParams.get("path"), "pixel.png");
+  assert.deepEqual(images, []);
+  const imageBlocks = [{ kind: "text", text: "![relative](pixel.png) ![absolute](/original/project/pixel.png)" }];
+  await act(async () => { root.update(render({ node: { ...props.node, data: { ...props.node.data, status: "running", blocks: imageBlocks } } })); });
+  assert.equal(root.root.findAllByType("img").length, 0);
+  await act(async () => { root.update(render({ node: { ...props.node, data: { ...props.node.data, status: "interrupted", blocks: imageBlocks } } })); });
+  const interruptedImages = root.root.findAllByType("img");
+  assert.deepEqual(interruptedImages.map((item) => new URL(item.props.src).searchParams.get("path")), ["pixel.png", "/original/project/pixel.png"]);
+  assert.ok(interruptedImages.every((item) => JSON.parse(new URL(item.props.src).searchParams.get("reply"))[2] === report.replyA.step));
+  await act(async () => { root.update(render({ node: { ...props.node, data: { ...props.node.data, blocks: [{ kind: "text", text: "![unicode](%E5%9B%BE%20%E7%89%87.png) ![external](https://example.com/picture.png) ![inline](data:image/png;base64,iVBORw0)" }] } } })); });
+  const renderedImages = root.root.findAllByType("img");
+  assert.equal(new URL(renderedImages[0].props.src).searchParams.get("path"), "图 片.png");
+  assert.equal(renderedImages[1].props.src, "https://example.com/picture.png");
+  assert.equal(renderedImages.length, 2);
+  assert.ok(JSON.stringify(root.toJSON()).includes("inline"));
+  passed("native local images use their reply identity and decoded Unicode paths, while external images and native protocol filtering remain intact");
 } finally {
   if (root) await act(async () => root.unmount());
   for (const dispose of cleanup.reverse()) dispose?.();

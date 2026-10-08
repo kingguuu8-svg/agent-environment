@@ -635,9 +635,17 @@ window.__ModuleLoader__.load({
             const openFile = useMemo(() => props.historySessionId ? (path, options) =>
               openHistoricalFile("replyOrigin", { sessionId: props.historySessionId, turn, step }, path, options) : props.openFile,
             [props.historySessionId, turn, step, props.openFile]);
+            const fileImages = useMemo(() => !props.historySessionId || !parent?.fileImages ? parent?.fileImages : {
+              ...parent.fileImages,
+              resolve: (path) => {
+                const url = new URL("api/remote-reply-image", document.baseURI);
+                url.search = new URLSearchParams({ reply: JSON.stringify([props.historySessionId, turn, step]), path }).toString();
+                return url.href;
+              },
+            }, [props.historySessionId, turn, step, parent?.fileImages]);
             // Native Markdown links read context; prose file mentions use the
-            // prop. Preserve the parent's external-link and image capabilities.
-            return h(MarkdownDelegateProvider, { ...parent, openFile }, h(NativeAssistant, { ...props, openFile }));
+            // prop. Keep native images and their UI, with the same reply origin.
+            return h(MarkdownDelegateProvider, { ...parent, openFile, fileImages }, h(NativeAssistant, { ...props, openFile }));
           }
           disposeView = ctx.slots.register({ name: "conversation.chat.node", key: "assistant-step", priority: -100, locale: native.locale,
             inject: (sessionId) => ({ ...native.inject?.(sessionId), historySessionId: sessionId }),

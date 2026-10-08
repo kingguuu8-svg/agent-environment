@@ -9,14 +9,14 @@
 | 会话、排队切换、输入权、文件作用域 | `verify_dsh.py`，Agent 在 VPS4，目标 VPS1，真实模型 | 16 项通过 |
 | 取消、目标离线、进程丢失、Host 重启 | `verify_dsh_recovery.py`，VPS4 与当前电脑，真实模型与实际服务停启 | 7 项通过 |
 | 新 HTTP MCP 的发现与调用 | `verify_dsh_mcp.py`，独立 DSH Host、真实模型、临时 HTTP MCP 服务 | 2 项通过 |
-| 模型请求、环境选择、接力与连接状态 | `verify_dsh_context.py`，独立 Host、loopback SSH、实际 HTTP 录制端点 | 18 项通过 |
+| 模型请求、环境选择、接力与连接状态 | `verify_dsh_context.py`，独立 Host、loopback SSH、实际 HTTP 录制端点 | 20 项通过 |
 | 输入权持久恢复与分支独立 | `verify_dsh_ownership.py`，独立原生 Host、本地 SSE 模型、两次停启 | 7 项通过 |
 | 客户端发送失败与返回结果 | `verify_dsh_client.mjs`，实际客户端拦截器、loopback HTTP 服务 | 4 项通过 |
 | 多窗口草稿与会话选择恢复 | `verify_dsh_drafts.mjs`，原生 Store 引擎、实际工厂与插件、模拟浏览器存储 | 13 项通过 |
 | 文件侧栏与引用菜单切换顺序 | `verify_dsh_files.mjs`，实际客户端组件、原生文件树、引用控制器与 Store、React 渲染器 | 8 项通过 |
 | 远端文件补全与实际引用读取 | `verify_dsh_references.py`，独立 Host、loopback SSH、本地 SSE 模型与真实 Pi 工具 | 10 项通过 |
 | 原生搜索、工具更新与迟到结果 | `verify_workspace_references.mjs`，锁定的 DSH 搜索、实际 MCP worker 与 Host 路由 | 7 项通过 |
-| Pi 结果与跨工作区历史文件预览 | `verify_dsh_pi_results.py`，实际 Host、loopback SSH、本地 SSE 模型与真实 Pi 工具 | 21 项通过 |
+| Pi 结果、历史文件与回复图片来源 | `verify_dsh_pi_results.py`，实际 Host、loopback SSH、本地 SSE 模型与真实 Pi 工具 | 28 项通过 |
 | 原生工具行与历史文件入口 | `verify_dsh_pi_views.mjs`，SSH 验证结果、原生工具行、SlotCore、原生选择器与 React 渲染器 | 10 项通过 |
 | 普通回复的文件来源与 Markdown 导航 | `verify_dsh_reply_views.mjs`，原生回复、Markdown 链接与上下文、SlotCore、React 渲染器 | 9 项通过 |
 | 启动等待、取消与登录恢复 | `verify_dsh_launcher.py`，独立 Host、loopback SSH、真实 Linux 用户服务 | 16 项通过 |
@@ -240,6 +240,24 @@ Host 现在将绑定会话的原生补全请求发送到当前目标 worker，�
 生产部署只替换客户端，并保留原件与权限备份；会话日志、绑定和五项投影、控制窗口、工作区分组、机器清单和配置经过前后比较。生产验证使用只读接口，未发送消息、切换工作区或接管输入。证据保存在 `.local/verification-dsh-context.json`、`.local/verification-dsh-handoff-web.json` 和 `.local/verification-dsh-handoff-deployed.json`。
 
 本轮覆盖单用户 Linux、SSH 工具目标和平台现有 HTTP 转发。取消用于尚未提交的准备；已经保存的切换从云端记录确认。新建会话和设备安装继续沿用原有提交行为，macOS 与 Windows 真机验证仍待后续开展。
+
+## 回复图片来源
+
+跨设备回复中的普通 Markdown 图片此前使用云端会话目录读取。隔离浏览器中，SSH 回复的内嵌图片显示读取失败，点击同一回复的文件名却能打开原设备的 35×17 图片，复现了两个入口来源不一致的问题。
+
+插件现在通过 DSH 已有的登录连接注册只读图片入口，按所属会话、轮次与步骤恢复原工作区，再使用现有文件读取边界。内嵌图片和原生放大查看继续使用上游组件。单次读取上限为原生附件上限与 worker 8 MiB 上限中的较小值；响应使用原生 MIME、禁止缓存与内容隔离规则。仓库直接声明既有的 `mime-types@3.0.2`，锁定的依赖版本保持。
+
+`verify_dsh_pi_results.py` 新增七项图片检查，总计 28 项通过。实际 PNG 字节证明接力前的 SSH 图片与接力后的云端同名图片各自来自正确目录；GET、HEAD、中文空格文件名、工作区内绝对路径、分支与冷启动均经过验证。未登录、非读取方法、无效历史身份、目录、超限文件、工作区外路径与外部软链接被拒绝。原位置失效与恢复、登记身份变化与恢复均保留原图片来源；图片读取保持当前绑定、控制窗口、待切换状态、会话日志字节及模型请求数。
+
+九项原生回复组件检查通过，新增了相对与绝对路径图片、中文路径、流式期间暂不显示本地图片，以及中断后使用原步骤来源的断言。外部 HTTPS 图片与原生协议过滤保持。Node 检查将确定的标记送入原生图片组件；完整 Markdown 解析、图片加载和放大查看由隔离浏览器验证。
+
+八项浏览器与集成检查通过。原设备不可连接时，历史仍可查看，同一会话成功接管并切到云端；新回复显示云端的 22×13 图片，旧回复保持读取失败。恢复原设备并重启 Host、刷新页面后，旧 35×17 图片与新 22×13 图片同时显示，当前云端目录、绑定版本与控制窗口保持。浏览器无脚本错误，共使用三条本地固定模型响应，预览没有新增模型请求。临时服务、目录、SSH fixture 与页面均已清理。
+
+模型上下文与接力 20 项、输入权恢复七项、历史工具行十项、文件侧栏八项、接力组件九项、草稿 13 项和客户端异常四项回归通过。JavaScript 语法、Python lint、格式、锁定依赖差异与 Git diff 检查通过。证据位于 `.local/verification-dsh-images.json`、`.local/verification-dsh-images-web.json` 与 `.local/verification-dsh-reply-images-deployed.json`。
+
+新版已部署到 VPS4，五份文件与原权限保留备份。三个运行文件与已验证源码哈希一致；生产依赖清单保留已有开发依赖和全部包条目，只增加 MIME 包的直接声明。35 个会话日志与五项投影、26 个控制窗口、七个工作区分组、六份配置和机器清单保持，三台机器的文件与引用入口检查通过。生产验证保持只读。
+
+本轮覆盖原生文件链接解析支持的本地 Markdown 图片。带查询参数或普通片段的旧式绝对路径图片仍使用上游回退入口，尚未验证其跨设备来源；目标文件变更后显示其当前内容。macOS 与 Windows 原生安装仍待真机验证。
 
 ## 设备安装
 

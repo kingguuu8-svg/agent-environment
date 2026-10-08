@@ -6,13 +6,16 @@ import concurrent.futures
 import json
 import os
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
+import zlib
 from email.parser import BytesParser
 from email.policy import default as email_policy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -474,10 +477,83 @@ def run(args):
                     )
                     historical_checks = []
                     reply_checks = []
+                    image_checks = []
 
                     def reply_passed(name):
                         reply_checks.append(name)
                         passed(name)
+
+                    def image_passed(name):
+                        image_checks.append(name)
+                        passed(name)
+
+                    def png(color):
+                        def chunk(name, data):
+                            return (
+                                struct.pack("!I", len(data))
+                                + name
+                                + data
+                                + struct.pack(
+                                    "!I", zlib.crc32(name + data) & 0xFFFFFFFF
+                                )
+                            )
+
+                        return (
+                            b"\x89PNG\r\n\x1a\n"
+                            + chunk(b"IHDR", struct.pack("!2I5B", 2, 2, 8, 2, 0, 0, 0))
+                            + chunk(
+                                b"IDAT", zlib.compress((b"\0" + bytes(color) * 2) * 2)
+                            )
+                            + chunk(b"IEND", b"")
+                        )
+
+                    cloud_image, remote_image = png((10, 160, 80)), png((200, 70, 30))
+                    image_path = "图 片.png"
+                    (cloud / image_path).write_bytes(cloud_image)
+                    (remote / image_path).write_bytes(remote_image)
+
+                    def image_url(data=reply_a, path=image_path, session=None):
+                        return (
+                            api.origin
+                            + "/api/remote-reply-image?"
+                            + urllib.parse.urlencode(
+                                {
+                                    "reply": json.dumps(
+                                        [
+                                            session or sessions["laptop"],
+                                            data["turn"],
+                                            data["step"],
+                                        ]
+                                    ),
+                                    "path": path,
+                                }
+                            )
+                        )
+
+                    def get_image(
+                        url=None, method="GET", rejected=None, authenticated=True
+                    ):
+                        request = urllib.request.Request(
+                            url or image_url(),
+                            method=method,
+                            headers={"Origin": api.origin},
+                        )
+                        browser = (
+                            api.browser
+                            if authenticated
+                            else urllib.request.build_opener(
+                                urllib.request.ProxyHandler({})
+                            )
+                        )
+                        try:
+                            with browser.open(request, timeout=20) as response:
+                                assert rejected is None, (
+                                    "Image request was unexpectedly accepted"
+                                )
+                                return response.read(), response.headers
+                        except urllib.error.HTTPError as error:
+                            assert rejected and error.code in rejected, error.code
+                            return error.code
 
                     def reply_origin(data=reply_a, session=None, **options):
                         return api.remote(
@@ -630,6 +706,66 @@ def run(args):
                         == view_before
                     )
                     assert len(requests) == model_count
+                    assert get_image()[0] == remote_image
+                    assert get_image(image_url(reply_b))[0] == cloud_image
+                    image_passed(
+                        "authenticated reply images preserve distinct original SSH and cloud bytes after handoff, including Unicode filenames"
+                    )
+                    body, headers = get_image(method="HEAD")
+                    assert body == b"" and int(headers["Content-Length"]) == len(
+                        remote_image
+                    )
+                    assert headers["Content-Type"] == "image/png"
+                    assert headers["Cache-Control"] == "private, no-store"
+                    assert headers["X-Content-Type-Options"] == "nosniff"
+                    assert "sandbox" in headers["Content-Security-Policy"]
+                    assert (
+                        get_image(image_url(path=str(remote / image_path)))[0]
+                        == remote_image
+                    )
+                    assert (
+                        api.remote(
+                            "get",
+                            {
+                                "sessionId": sessions["laptop"],
+                                "clientId": owners["laptop"],
+                            },
+                        )
+                        == view_before
+                    )
+                    assert len(requests) == model_count
+                    image_passed(
+                        "GET and HEAD retain native MIME, bounded preview headers and original absolute paths without changing the controller or binding"
+                    )
+                    get_image(authenticated=False, rejected=[401, 403])
+                    get_image(method="POST", rejected=[400, 404, 405])
+                    for query in [
+                        "",
+                        "?reply=bad&path=pixel.png",
+                        "?reply=null&path=pixel.png",
+                        "?reply=%5B1%5D&path=pixel.png",
+                    ]:
+                        get_image(
+                            api.origin + "/api/remote-reply-image" + query,
+                            rejected=[400],
+                        )
+                    get_image(image_url({"turn": -1, "step": 0}), rejected=[404])
+                    get_image(image_url(session="session-missing"), rejected=[404])
+                    image_passed(
+                        "the native authentication carrier rejects anonymous and non-read requests, while invalid reply identities cannot read a file"
+                    )
+                    oversized = remote / "oversized-image.png"
+                    with oversized.open("wb") as stream:
+                        stream.truncate(8 * 1024 * 1024 + 1)
+                    get_image(image_url(path=oversized.name), rejected=[413])
+                    get_image(
+                        image_url(path=oversized.name), method="HEAD", rejected=[413]
+                    )
+                    get_image(image_url(path="."), rejected=[403])
+                    oversized.unlink()
+                    image_passed(
+                        "oversized or non-regular reply images are refused before returning bytes"
+                    )
                     assert reply_origin()["binding"] == old_binding
                     assert reply_origin(reply_b)["binding"]["machine"] == "cloud"
                     assert api.read(reply_scope, "说明 空格.txt")[
@@ -676,6 +812,7 @@ def run(args):
                         "outside-link/secret.txt",
                         str(cloud / "说明 空格.txt"),
                     ]:
+                        get_image(image_url(path=path), rejected=[404])
                         for checked_scope in [scope, reply_scope]:
                             api.rpc(
                                 "workspaceFiles/read",
@@ -821,6 +958,9 @@ def run(args):
                     ].splitlines() == ["AFTER"]
                     assert api.remote("get", {"sessionId": fork})["control"] is None
                     for data, marker in [(reply_a, "AFTER"), (reply_b, "BEFORE")]:
+                        assert get_image(image_url(data, session=fork))[0] == (
+                            remote_image if data == reply_a else cloud_image
+                        )
                         assert api.read(reply_origin(data)["scopeId"], "说明 空格.txt")[
                             "text"
                         ].splitlines() == [marker]
@@ -838,6 +978,8 @@ def run(args):
                     offline = ssh.target_root / "offline-history"
                     remote.rename(offline)
                     try:
+                        get_image(rejected=[404])
+                        assert get_image(image_url(reply_b))[0] == cloud_image
                         api.rpc(
                             "workspaceFiles/read",
                             {
@@ -875,6 +1017,10 @@ def run(args):
                     ].splitlines() == ["AFTER"]
                     reply_passed(
                         "an unavailable reply workspace fails without falling back, other replies remain usable and restoration recovers the same link"
+                    )
+                    assert get_image()[0] == remote_image
+                    image_passed(
+                        "workspace boundaries and native forks preserve image origins, and an unavailable original target fails without fallback before recovering"
                     )
 
                     stop()
@@ -975,6 +1121,12 @@ def run(args):
                     reply_passed(
                         "cold reply previews recover from durable steps and leave pending switches and session log bytes untouched"
                     )
+                    assert get_image()[0] == remote_image
+                    assert get_image(image_url(reply_b))[0] == cloud_image
+                    assert log_path.read_bytes() == cold_log
+                    image_passed(
+                        "cold HTTP image reads use durable reply origins without activating the Agent or applying a pending switch"
+                    )
                     # The list can use an older end-seed summary. Activation
                     # must still commit the persisted pending switch, proving
                     # the preceding historical preview did not activate it.
@@ -998,6 +1150,7 @@ def run(args):
                     api = start()
                     origin("laptop", edit_id, rejected=True)
                     reply_origin(rejected=True)
+                    get_image(rejected=[404])
                     api.rpc(
                         "workspaceFiles/read",
                         {
@@ -1031,6 +1184,14 @@ def run(args):
                     ].splitlines() == ["AFTER"]
                     reply_passed(
                         "changed target identity is refused for replies and restoration recovers the original scope"
+                    )
+                    assert get_image()[0] == remote_image
+                    image_passed(
+                        "changed registered image target identity is refused and restored identity recovers the same preview"
+                    )
+                    save(
+                        ROOT / ".local/verification-dsh-images.json",
+                        {"checks": image_checks, "modelRequestsDuringPreviews": 0},
                     )
                     save(
                         ROOT / ".local/verification-dsh-replies.json",

@@ -4,7 +4,7 @@ import { lstat, open, realpath, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
-const maxBytes = 8 * 1024 * 1024;
+export const maxBytes = 8 * 1024 * 1024;
 const fileSearches = new Map();
 export function invalidateWorkspaceReferences(workspace) {
   fileSearches.get(workspace)?.search.invalidate();
