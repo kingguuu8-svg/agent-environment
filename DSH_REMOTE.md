@@ -147,6 +147,8 @@ systemctl --user restart remote-dsh.service
 
 同一工作区的会话共享工具连接。连接恢复后，旧请求迟到的错误与项目指令回包只影响原连接，新连接上的任务和最新项目指令保持。失败命令不会自动重跑，后续请求继续使用原机器与目录。
 
+工具恢复后，下一步会重新检查当前项目指令，并更新工作环境的连接状态。另一会话已恢复设备时，旧信息读取的超时保留新连接与当前指令；设备短暂停顿后沿用原连接恢复，也会重新确认项目状态。
+
 新接入的 Linux 设备可分别检查或重启：
 
 ```bash
@@ -179,7 +181,7 @@ Web 基于 DSH `0.2.0-rc.2`，通过插件复用其会话、聊天、分支、�
 
 `verify_mcp_discovery.mjs` 与 `verify_dsh_discovery.py` 检查额外服务无响应时的完整发现、独立取消、恢复和同一会话的跨目标操作，使用临时 HTTP MCP 服务与本地固定模型响应。
 
-`verify_environment_recovery.mjs` 与 `verify_environment_recovery.py` 检查真实 Pi 连接恢复中的迟到错误、项目指令回包和独立取消；后者使用隔离 SSH 目标。`verify_dsh_environment_recovery.py` 通过真实 DSH 会话与本地 SSE 模型验证共享连接恢复、原命令执行次数、两个会话的输入权和 Host 重启。故障顺序由测试临时文件控制，生产 Host 沿用原接口。
+`verify_environment_recovery.mjs` 与 `verify_environment_recovery.py` 检查真实 Pi 连接恢复中的迟到错误、项目指令回包和独立取消；后者使用隔离 SSH 目标。`verify_dsh_environment_recovery.py` 通过真实 DSH 会话与本地 SSE 模型验证共享连接恢复、原命令执行次数、两个会话的输入权和 Host 重启，也检查重新连接、旧读取超时与原连接恢复后的项目指令和可用性。故障顺序由测试临时文件控制，生产 Host 沿用原接口。
 
 `verify_dsh_context.py` 在独立 Host 与 SSH 环境中抓取实际模型 HTTP 请求，检查切换前后目标、项目指令、历史保留及工作区命名，也检查查看窗口接力、无效选择、执行中接力和慢准备期间的控制权变化。Host 启动时修正旧的自动生成名称；用户手动命名继续保留。
 

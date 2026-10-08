@@ -309,8 +309,18 @@ export class RemoteWorkspaces extends TypertRemoteService {
     const { stdout } = await execute(this.python, [join(this.runtimeDir, "device_onboarding.py"), "confirm", "--runtime", this.runtimeDir, "--state", this.stateDir, "--pairing", request.pairingId, "--machine", request.machine], { signal, timeout: 5000, maxBuffer: 65536 });
     return JSON.parse(stdout);
   }
-  connectionState(id) {
+  connectionCheck(id) {
     const checked = this.connectionChecks.get(id);
+    // A successful reopen or context refresh is newer evidence than a cached
+    // offline check. Keep these references inside the Host, out of the wire view.
+    return checked?.connection === this.environment.connections.get(id)
+      && checked?.context === this.environment.get(id).context ? checked?.value : undefined;
+  }
+  recordConnectionCheck(id, value) {
+    this.connectionChecks.set(id, { value, connection: this.environment.connections.get(id), context: this.environment.get(id).context });
+  }
+  connectionState(id) {
+    const checked = this.connectionCheck(id);
     if (this.checkingConnections.has(id)) return { ...checked, status: "checking" };
     const error = this.environment.get(id).lastError;
     if (error) return { ...checked, status: "unavailable", error };
@@ -319,7 +329,7 @@ export class RemoteWorkspaces extends TypertRemoteService {
   async refreshPromptContext(id, signal) {
     signal?.throwIfAborted();
     const entry = this.environment.get(id);
-    const checked = this.connectionChecks.get(id);
+    const checked = this.connectionCheck(id);
     // A known unreachable default workspace must not hold up cloud reasoning
     // or explicit calls to another target on every model step.
     if (checked?.status === "unavailable" && Date.now() - checked.checkedAt < 65000) {
@@ -329,10 +339,10 @@ export class RemoteWorkspaces extends TypertRemoteService {
     const deadline = new AbortController();
     const refreshSignal = signal ? AbortSignal.any([signal, deadline.signal]) : deadline.signal;
     const timer = setTimeout(() => deadline.abort(new Error("工作区信息检查超时；可以继续对话或明确操作其他机器。")), 12000);
-    let onAbort;
+    let onAbort, connection, context, failure;
     try {
       await Promise.race([
-        this.environment.refresh(id, refreshSignal),
+        this.environment.refresh(id, refreshSignal, (active) => { connection = active; context = entry.context; }),
         new Promise((_, reject) => {
           onAbort = () => reject(refreshSignal.reason);
           if (refreshSignal.aborted) onAbort();
@@ -341,13 +351,20 @@ export class RemoteWorkspaces extends TypertRemoteService {
       ]);
     } catch (error) {
       signal?.throwIfAborted();
-      entry.lastError = errorMessage(error);
-      this.environment.save();
+      failure = error;
     } finally {
       clearTimeout(timer);
       if (onAbort) refreshSignal.removeEventListener("abort", onAbort);
     }
-    if (entry.lastError) this.connectionChecks.set(id, { status: "unavailable", checkedAt: Date.now(), error: entry.lastError });
+    // The Host's bounded wait can expire after another session has restored
+    // this workspace. Neither its deadline nor a late reply owns that health.
+    const current = this.environment.connections.get(id);
+    if (current && current !== connection) return;
+    if (connection && entry.context !== context && (failure || !current)) return;
+    if (failure) { entry.lastError = errorMessage(failure); this.environment.save(); }
+    this.recordConnectionCheck(id, entry.lastError
+      ? { status: "unavailable", checkedAt: Date.now(), error: entry.lastError }
+      : { status: "online", checkedAt: Date.now() });
   }
   async probe(request) {
     checkRequest(request);
@@ -368,11 +385,11 @@ export class RemoteWorkspaces extends TypertRemoteService {
         const entry = this.environment.get(id);
         if (entry.lastError) { delete entry.lastError; this.environment.save(); }
         const result = { status: "online", checkedAt: Date.now(), latencyMs: Date.now() - started };
-        this.connectionChecks.set(id, result);
+        this.recordConnectionCheck(id, result);
         return result;
       } catch (error) {
         const result = { status: "unavailable", checkedAt: Date.now(), error: errorMessage(error) };
-        this.connectionChecks.set(id, result);
+        this.recordConnectionCheck(id, result);
         return result;
       } finally { clearTimeout(timer); }
     })();
@@ -503,11 +520,14 @@ export class RemoteWorkspaces extends TypertRemoteService {
     }
   }
   async callTool(id, name, args, signal) {
-    await this.environment.connect(id);
+    const connection = await this.environment.connect(id);
     signal?.throwIfAborted();
     const descriptor = this.environment.descriptors(id).find((tool) => tool.name === name);
     if (!descriptor) throw new Error(`Unknown tool ${name} on ${id}`);
     const result = await this.environment.definition(id, descriptor).execute(randomUUID(), args, signal);
+    // A resumed worker can answer on the same transport. Its successful tool
+    // releases the negative cache so the next step rechecks project facts.
+    if (this.environment.connections.get(id) === connection && this.connectionCheck(id)?.status === "unavailable") this.connectionChecks.delete(id);
     return { content: result.content,
       ...(this.environment.get(id).kind !== "mcp" ? { _meta: { "remote/pi": { ...result.details, origin: this.binding(id) } } } : {}),
       ...(result.details?.structuredContent ? { structuredContent: result.details.structuredContent } : {}) };

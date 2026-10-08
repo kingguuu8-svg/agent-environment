@@ -10,7 +10,7 @@
 | 取消、目标离线、进程丢失、Host 重启 | `verify_dsh_recovery.py`，VPS4 与当前电脑，真实模型与实际服务停启 | 7 项通过 |
 | 新 HTTP MCP 的发现与调用 | `verify_dsh_mcp.py`，独立 DSH Host、真实模型、临时 HTTP MCP 服务 | 2 项通过 |
 | 部分 MCP 服务离线与发现恢复 | `verify_mcp_discovery.mjs`，官方 SDK HTTP 服务与共享环境；`verify_dsh_discovery.py`，独立 Host、loopback SSH 与本地 SSE 模型 | 14 项与 5 项通过 |
-| 共享连接恢复与迟到请求隔离 | `verify_environment_recovery.mjs` 与 `.py`，真实 Pi 与 loopback SSH；`verify_dsh_environment_recovery.py`，原生 Host 与本地 SSE 模型 | 本地 10 项、SSH 10 项与 Host 5 项通过 |
+| 共享连接恢复与迟到请求隔离 | `verify_environment_recovery.mjs` 与 `.py`，真实 Pi 与 loopback SSH；`verify_dsh_environment_recovery.py`，原生 Host 与本地 SSE 模型 | 本地 10 项、SSH 10 项与 Host 10 项通过 |
 | 模型请求、环境选择、接力与连接状态 | `verify_dsh_context.py`，独立 Host、loopback SSH、实际 HTTP 录制端点 | 24 项通过 |
 | 输入权持久恢复与分支独立 | `verify_dsh_ownership.py`，独立原生 Host、本地 SSE 模型、两次停启 | 7 项通过 |
 | 客户端发送失败与返回结果 | `verify_dsh_client.mjs`，实际客户端拦截器、loopback HTTP 服务 | 4 项通过 |
@@ -348,6 +348,20 @@ uv run python verify_dsh_environment_recovery.py --node /home/kingguuu8/.local/n
 ```
 
 新版已部署到 VPS4，只替换 `environment.mjs`，原件与权限保留备份。35 个会话日志及投影、26 个输入权记录、七个工作区分组、六份配置、机器清单与云端草稿保持；三台机器的文件与引用检查通过。原页面只读刷新后保留会话、机器、目录和查看权限，目标已连接。生产检查没有发送消息、接管或切换，部署证据位于 `.local/verification-dsh-connection-recovery-deployed.json`。
+
+## 跨设备恢复状态
+
+2026 年 10 月 8 日，真实 SSH 与 Pi 工具复现了恢复后的状态错误。工作区信息检查断开后，工具已经重新连接并读到目标文件，下一步模型请求却仍带连接错误和最后已知指令，界面继续显示不可用。另两个检查分别复现了旧信息读取超时污染另一会话已恢复的连接，以及同一 worker 恢复并返回工具结果后仍被离线缓存阻止刷新。
+
+本轮将连接检查与它实际观察的连接和项目状态对应。重新连接或项目状态刷新后，旧离线记录失效；旧读取超时只更新原连接的状态。成功工具调用释放同一连接上的离线记录，下一步重新读取项目指令。内部引用只在 Host 内保存，Web 接口继续返回原有状态字段，会话日志与配置格式保持。
+
+扩展后的 `verify_dsh_environment_recovery.py` 十项检查通过。实际 SDK 关闭错误与原生信息回包用于控制故障顺序；冷启动读取期间，另一会话恢复后，旧读取的 12 秒超时保留新连接和指令。暂停真实 SSH worker 后，原生读取在恢复的同一进程上完成，下一步模型请求获得更新的项目指令并清除离线提示。两个会话继续保持工作区、输入权和历史，两次 Host 重启后恢复正确。20 条模型请求全部来自隔离 SSE 端点。
+
+七项浏览器断言通过，检查查看窗口显示不可用、自动恢复在线、任务完成、机器与目录保持、输入权保持和刷新恢复。浏览器只查看已有测试会话，工具调用由隔离脚本明确提交；临时页面没有提交模型请求或接管。证据位于 `.local/verification-dsh-recovery-status-ui.json`。上下文 24 项、输入权七项、MCP 发现 14 项和真实 Host 发现五项回归通过，环境恢复本地与 SSH 各十项回归通过。
+
+基线与修正后的请求断言分别保存在 `.local/verification-dsh-context-recovery-before.json`、`.local/verification-dsh-context-deadline-recovery-before.json`、`.local/verification-dsh-same-connection-recovery-before.json` 及对应的无 `-before` 文件。早期故障脚本未等待真实信息请求就关闭连接，改为暂停实际 worker 并断言 SDK 的 `-32000` 错误后取得明确证据。测试暂停的 worker 在清理前恢复，临时 Host、SSH、模型端点与目录已清理。macOS 与 Windows 真机安装仍待验证。
+
+新版已部署到 VPS4，仅替换 `environment.mjs` 和 Host 插件，原件与权限保留备份。35 个会话日志及投影、26 个输入权记录、七个工作区分组、六份配置、机器清单与云端草稿保持；三台机器的文件与引用检查通过。生产页面只读刷新后保留会话、机器、目录与查看权限，目标已连接。生产检查没有提交模型请求、接管或切换，源码哈希与本轮验证文件一致。部署证据位于 `.local/verification-dsh-recovery-status-deployed.json`。
 
 ## 设备安装
 

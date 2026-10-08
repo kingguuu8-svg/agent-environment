@@ -159,12 +159,14 @@ export class Environment {
     }
   }
 
-  async refresh(id, signal) {
+  async refresh(id, signal, onConnection) {
     const entry = this.get(id);
     let connection;
     try {
       connection = await this.connect(id);
       signal?.throwIfAborted();
+      // A caller's own deadline must be fenced against this exact read.
+      onConnection?.(connection);
       if (connection.fetchContext) {
         const context = await connection.fetchContext(signal);
         signal?.throwIfAborted();

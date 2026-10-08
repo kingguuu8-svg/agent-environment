@@ -53,7 +53,7 @@ class FixtureModel(BaseHTTPRequestHandler):
                         "command": "printf 'STARTED\\n' > new-started.txt; while [ ! -f allow-new-finish ]; do sleep .1; done; printf 'DONE\\n' > new-finished.txt; cat new-finished.txt"
                     },
                 )
-            elif marker == "RECOVERY-CLOUD":
+            elif marker in {"RECOVERY-CLOUD", "RECOVERY-DURING-WAIT"}:
                 name, arguments = (
                     "environment",
                     {
@@ -64,7 +64,14 @@ class FixtureModel(BaseHTTPRequestHandler):
                     },
                 )
             else:
-                assert marker == "RECOVERY-READ"
+                assert marker in {
+                    "RECOVERY-READ",
+                    "RECOVERY-RETRY",
+                    "RECOVERY-LATEST",
+                    "RECOVERY-LATE",
+                    "RECOVERY-AFTER-LATE",
+                    "RECOVERY-SAME-CONNECTION",
+                }
                 name, arguments = "read", {"path": "target-proof.txt"}
             delta = {
                 "role": "assistant",
@@ -169,6 +176,10 @@ import { access, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 const connect = Environment.prototype.connect, hooked = new WeakSet();
+let failedContext = false, heldContext = false;
+async function exists(path) {
+  try { await access(path); return true; } catch (error) { if (error.code === "ENOENT") return false; throw error; }
+}
 async function wait(path) {
   for (let i = 0; i < 1200; i++) {
     try { await access(path); return; } catch (error) { if (error.code !== "ENOENT") throw error; }
@@ -177,6 +188,7 @@ async function wait(path) {
   throw new Error("Isolated recovery fixture checkpoint timed out");
 }
 Environment.prototype.connect = async function(id) {
+  const initiallyCold = !this.connections.has(id);
   const connection = await connect.call(this, id);
   if (this.get(id).workspace !== target || hooked.has(connection)) return connection;
   hooked.add(connection);
@@ -192,11 +204,53 @@ Environment.prototype.connect = async function(id) {
     await wait(join(directory, "release-old"));
     throw error;
   };
+  const context = connection.fetchContext.bind(connection);
+  connection.fetchContext = async (signal) => {
+    if (!failedContext && await exists(join(directory, "arm-failed-context"))) {
+      failedContext = true;
+      const failure = context(signal).catch((error) => error);
+      await connection.client.close();
+      const error = await failure;
+      assert.equal(error.code, -32000, "must be the actual closed context transport");
+      await writeFile(join(directory, "failed-context.json"), JSON.stringify({ code: error.code }));
+      throw error;
+    }
+    if (!heldContext && await exists(join(directory, "arm-late-context"))) {
+      heldContext = true;
+      const result = await context(signal);
+      await connection.client.close();
+      await writeFile(join(directory, "held-context.json"), JSON.stringify({ actualResourceReply: true, initiallyCold }));
+      await wait(join(directory, "release-context"));
+      return result;
+    }
+    return context(signal);
+  };
   return connection;
 };
 """
         )
         host = None
+        paused_workers = set()
+
+        def workers():
+            found = set()
+            for proc in Path("/proc").iterdir():
+                if not proc.name.isdecimal():
+                    continue
+                try:
+                    command = (proc / "cmdline").read_bytes().split(b"\0")
+                except OSError:
+                    continue
+                if str(remote).encode() in command and any(
+                    argument.endswith(b"/worker.mjs") for argument in command
+                ):
+                    found.add(int(proc.name))
+            return found
+
+        def resume_workers():
+            for pid in paused_workers & workers():
+                os.kill(pid, signal.SIGCONT)
+            paused_workers.clear()
 
         def passed(name):
             checks.append(name)
@@ -383,6 +437,16 @@ Environment.prototype.connect = async function(id) {
                     assert matching
                     return matching[-1]
 
+                def finished(device, marker):
+                    def checkpoint():
+                        try:
+                            request_for(marker, True)
+                        except AssertionError:
+                            return False
+                        return not view(device)["running"]
+
+                    wait_for(checkpoint, timeout=20)
+
                 old = request_for("RECOVERY-OLD", True)
                 assert any(
                     "Connection closed" in text(item["content"])
@@ -413,21 +477,200 @@ Environment.prototype.connect = async function(id) {
                 )
 
                 prompt("a", "RECOVERY-READ")
-                wait_for(
-                    lambda: view("a"), lambda value: not value["running"], timeout=15
-                )
+                finished("a", "RECOVERY-READ")
                 assert "RECOVERED-REMOTE" in str(
                     request_for("RECOVERY-READ", True)["messages"]
                 )
                 prompt("b", "RECOVERY-CLOUD")
-                wait_for(
-                    lambda: view("b"), lambda value: not value["running"], timeout=15
-                )
+                finished("b", "RECOVERY-CLOUD")
                 assert "INDEPENDENT-CLOUD" in str(
                     request_for("RECOVERY-CLOUD", True)["messages"]
                 )
                 passed(
                     "the failed session can continue native remote work and the other session can use independent cloud tools"
+                )
+
+                (remote / "AGENTS.md").write_text("RESTORED-REMOTE-PROJECT\n")
+                paused_workers.update(workers())
+                assert len(paused_workers) == 1
+                for pid in paused_workers:
+                    os.kill(pid, signal.SIGSTOP)
+                (base / "arm-failed-context").touch()
+                prompt("a", "RECOVERY-RETRY")
+                finished("a", "RECOVERY-RETRY")
+                resume_workers()
+                (base / "arm-failed-context").unlink()
+                assert (
+                    json.loads((base / "failed-context.json").read_text())["code"]
+                    == -32000
+                )
+                restored = request_for("RECOVERY-RETRY", True)
+                system = text(restored["messages"][0]["content"])
+                proof = {
+                    "nativeReadSucceeded": any(
+                        "RECOVERED-REMOTE" in text(item["content"])
+                        for item in restored["messages"]
+                        if item["role"] == "tool"
+                    ),
+                    "connectionWarningCleared": "Target connection error" not in system,
+                    "projectFactsCurrent": "Project instructions" in system
+                    and "Last known project instructions" not in system,
+                    "currentProjectLoaded": "RESTORED-REMOTE-PROJECT" in system,
+                    "visibleConnectionRestored": view("a")["connection"]["status"]
+                    == "online",
+                    "actualSSH": True,
+                    "nativePiTools": True,
+                    "metadataFaultReached": (base / "failed-context.json").exists(),
+                }
+                save(ROOT / ".local/verification-dsh-context-recovery.json", proof)
+                assert all(proof.values()), (
+                    "a restored native tool still leaves cached offline context"
+                )
+                passed(
+                    "a native tool reopening the workspace clears cached offline facts and restores visible availability before the next model step"
+                )
+
+                (remote / "AGENTS.md").write_text("LATEST-REMOTE-PROJECT\n")
+                prompt("b", "RECOVERY-LATEST")
+                finished("b", "RECOVERY-LATEST")
+                latest = text(
+                    request_for("RECOVERY-LATEST", True)["messages"][0]["content"]
+                )
+                assert (
+                    "LATEST-REMOTE-PROJECT" in latest
+                    and "RESTORED-REMOTE-PROJECT" not in latest
+                )
+                assert "Target connection error" not in latest
+                passed(
+                    "another session immediately refreshes changed project instructions after native recovery instead of waiting for a browser probe"
+                )
+
+                # Start with no target connection, so the deadline guard must
+                # observe the connection actually opened by the pending read.
+                stop()
+                api = start()
+                for device in controls:
+                    assert view(device)["control"]["mine"]
+                    controls[device]["epoch"] = view(device)["control"]["epoch"]
+                (base / "arm-late-context").touch()
+                prompt("a", "RECOVERY-LATE")
+                wait_for(lambda: (base / "held-context.json").exists(), timeout=10)
+                assert json.loads((base / "held-context.json").read_text())[
+                    "actualResourceReply"
+                ]
+                assert json.loads((base / "held-context.json").read_text())[
+                    "initiallyCold"
+                ]
+                (base / "arm-late-context").unlink()
+                (remote / "AGENTS.md").write_text("RECONNECTED-DURING-CONTEXT-WAIT\n")
+                assert (
+                    api.remote("probe", {"target": target_id})["status"]
+                    == "unavailable"
+                )
+                assert api.remote("probe", {"target": target_id})["status"] == "online"
+                assert view("a")["running"]
+                prompt("b", "RECOVERY-DURING-WAIT")
+                finished("b", "RECOVERY-DURING-WAIT")
+                assert "INDEPENDENT-CLOUD" in str(
+                    request_for("RECOVERY-DURING-WAIT", True)["messages"]
+                )
+                finished("a", "RECOVERY-LATE")
+                (base / "release-context").touch()
+                late = request_for("RECOVERY-LATE", True)
+                system = text(late["messages"][0]["content"])
+                deadline_proof = {
+                    "nativeReadSucceeded": any(
+                        "RECOVERED-REMOTE" in text(item["content"])
+                        for item in late["messages"]
+                        if item["role"] == "tool"
+                    ),
+                    "connectionWarningCleared": "Target connection error" not in system,
+                    "projectFactsCurrent": "Last known project instructions"
+                    not in system,
+                    "recoveredInstructionsKept": "RECONNECTED-DURING-CONTEXT-WAIT"
+                    in system
+                    and "LATEST-REMOTE-PROJECT" not in system,
+                    "visibleConnectionRestored": view("a")["connection"]["status"]
+                    == "online",
+                    "actualNativeContextResponseHeld": True,
+                    "initialConnectionWasCold": True,
+                }
+                save(
+                    ROOT / ".local/verification-dsh-context-deadline-recovery.json",
+                    deadline_proof,
+                )
+                assert all(deadline_proof.values()), (
+                    "a late context deadline marked the replacement connection offline"
+                )
+                assert set(view("a")["connection"]) <= {
+                    "status",
+                    "checkedAt",
+                    "error",
+                    "latencyMs",
+                }
+                passed(
+                    "a cold-start context read timing out after another session restores the workspace preserves the recovered connection and current project facts"
+                )
+
+                (remote / "AGENTS.md").write_text("LATEST-AFTER-LATE-CONTEXT\n")
+                prompt("b", "RECOVERY-AFTER-LATE")
+                finished("b", "RECOVERY-AFTER-LATE")
+                system = text(
+                    request_for("RECOVERY-AFTER-LATE", True)["messages"][0]["content"]
+                )
+                assert (
+                    "LATEST-AFTER-LATE-CONTEXT" in system
+                    and "RECONNECTED-DURING-CONTEXT-WAIT" not in system
+                )
+                assert "Target connection error" not in system
+                passed(
+                    "the peer session continues refreshing its project instructions after the old context deadline and delayed reply"
+                )
+
+                (remote / "AGENTS.md").write_text("RECOVERED-SAME-CONNECTION\n")
+                same_workers = workers()
+                assert len(same_workers) == 1
+                paused_workers.update(same_workers)
+                for pid in paused_workers:
+                    os.kill(pid, signal.SIGSTOP)
+                prompt("b", "RECOVERY-SAME-CONNECTION")
+
+                def first_request():
+                    try:
+                        return request_for("RECOVERY-SAME-CONNECTION")
+                    except AssertionError:
+                        return None
+
+                unavailable = wait_for(first_request, timeout=16)
+                assert "Target connection error" in text(
+                    unavailable["messages"][0]["content"]
+                )
+                resume_workers()
+                finished("b", "RECOVERY-SAME-CONNECTION")
+                response = request_for("RECOVERY-SAME-CONNECTION", True)
+                system = text(response["messages"][0]["content"])
+                same_proof = {
+                    "sameNativeWorker": workers() == same_workers,
+                    "nativeReadSucceeded": any(
+                        "RECOVERED-REMOTE" in text(item["content"])
+                        for item in response["messages"]
+                        if item["role"] == "tool"
+                    ),
+                    "connectionWarningCleared": "Target connection error" not in system,
+                    "projectFactsCurrent": "RECOVERED-SAME-CONNECTION" in system
+                    and "Last known project instructions" not in system,
+                    "visibleConnectionRestored": view("b")["connection"]["status"]
+                    == "online",
+                }
+                save(
+                    ROOT / ".local/verification-dsh-same-connection-recovery.json",
+                    same_proof,
+                )
+                assert all(same_proof.values()), (
+                    "a successful tool on the resumed connection still leaves cached offline context"
+                )
+                passed(
+                    "a real native tool after a temporary pause refreshes project facts on the same worker and clears offline availability"
                 )
 
                 def saved_sessions():
@@ -458,7 +701,7 @@ Environment.prototype.connect = async function(id) {
                         "text"
                     ].splitlines() == ["RECOVERED-REMOTE"]
                 assert saved_sessions() == saved
-                assert len(FixtureModel.requests) == count == 8
+                assert len(FixtureModel.requests) == count == 20
                 passed(
                     "a real Host restart preserves both histories and controllers; read-only recovery sends no additional model requests"
                 )
@@ -476,7 +719,9 @@ Environment.prototype.connect = async function(id) {
                 )
             finally:
                 (base / "release-old").touch()
+                (base / "release-context").touch()
                 (remote / "allow-new-finish").touch()
+                resume_workers()
                 stop()
                 model.shutdown()
     print(
