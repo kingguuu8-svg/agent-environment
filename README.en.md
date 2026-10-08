@@ -1,4 +1,4 @@
-# Agent Environment
+# DSH Remote Hub
 
 A shared working environment for agents across your devices. Register machines, workspaces and MCP services on one persistent host. Existing agents keep their own models, conversations and local tools while calling native tools on explicit remote targets.
 
@@ -11,8 +11,8 @@ The optional DSH Web host runs the agent and stores conversations centrally. Ope
 On a Linux host, install Node.js 22.19.0+, Python 3.11+, [uv](https://docs.astral.sh/uv/getting-started/installation/) and the OpenSSH client. Clone the repository and start the environment:
 
 ```bash
-git clone https://github.com/kingguuu8-svg/agent-environment.git
-cd agent-environment
+git clone https://github.com/kingguuu8-svg/dsh-remote-hub.git
+cd dsh-remote-hub
 sh scripts/setup.sh environment
 mkdir -p "$HOME/agent-workspace"
 python3 agent_environment.py init --workspace "$HOME/agent-workspace"

@@ -1,5 +1,5 @@
 [project]
-name = "remote-mcp-demo"
+name = "dsh-remote-hub"
 version = "0.1.0"
 description = "Shared machine and workspace tool environment for agents"
 license = "MIT"

@@ -1,6 +1,6 @@
 # Security
 
-Agent Environment currently serves one owner and their trusted devices. A valid Environment account/key can invoke all registered resources. DSH Web access grants control of that owner's conversations and environment. Device tools run with the target user's filesystem and process permissions.
+DSH Remote Hub currently serves one owner and their trusted devices. A valid Environment account/key can invoke all registered resources. DSH Web access grants control of that owner's conversations and environment. Device tools run with the target user's filesystem and process permissions.
 
 ## Access boundaries
 
@@ -16,6 +16,6 @@ Other agents may operate on the same files or processes. Each call names an expl
 
 ## Reporting
 
-Report sensitive findings through [GitHub private vulnerability reporting](https://github.com/kingguuu8-svg/agent-environment/security/advisories/new). Avoid attaching keys, installer payloads, launch URLs, session transcripts or private host configuration.
+Report sensitive findings through [GitHub private vulnerability reporting](https://github.com/kingguuu8-svg/dsh-remote-hub/security/advisories/new). Avoid attaching keys, installer payloads, launch URLs, session transcripts or private host configuration.
 
 Include the affected version, operating systems, minimal reproduction using synthetic data, and the expected access boundary. General connection or installation failures can use the regular bug template after removing private information.
