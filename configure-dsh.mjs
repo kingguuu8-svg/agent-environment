@@ -3,6 +3,7 @@ import { chmodSync, lstatSync, mkdirSync, readFileSync, readlinkSync, symlinkSyn
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
+import { modelPatches } from "./dsh-product/model-config.mjs";
 const { values } = parseArgs({ options: {
   home: { type: "string" }, targets: { type: "string" }, python: { type: "string" },
   state: { type: "string" }, workspace: { type: "string" }, model: { type: "string" },
@@ -19,11 +20,9 @@ try {
   if (readlinkSync(profileModules) !== modules) { unlinkSync(profileModules); symlinkSync(modules, profileModules, "dir"); }
 } catch (error) { if (error.code === "ENOENT") symlinkSync(modules, profileModules, "dir"); else throw error; }
 const modelConfig = JSON.parse(readFileSync(resolve(values.model), "utf8"));
-const [provider, model] = Object.entries(modelConfig.providers)[0];
 const patches = [
   { id: "hmr", disabled: true },
-  { id: "agent-default-model", config: { provider, model: model.models[0].id } },
-  { id: "llm-pi-ai", config: { providers: { [provider]: { apiKeyEnv: "REMOTE_MCP_CHECK_API_KEY", api: model.api, baseURL: model.baseUrl, models: model.models.map((item) => ({ ...item, name: item.id })), retryPolicy: { mode: "normal", maxRetries: 1 } } } } },
+  ...modelPatches(modelConfig),
   { id: "session-title-llm", disabled: true },
   { id: "preset-standard", disabled: true },
   { id: "preset-minimal", disabled: true },

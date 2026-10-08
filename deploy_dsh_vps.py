@@ -61,7 +61,11 @@ def save(path,text):
 targets=base/'dsh-targets.json'
 with (base/'dsh-targets.lock').open('a') as lock:
  fcntl.flock(lock,fcntl.LOCK_EX);data=json.loads(targets.read_text()) if targets.exists() else {'targets':{}};data['targets']['vps1']=p['target'];save(targets,json.dumps(data,indent=2))
-save(base/'dsh-models.json',json.dumps(p['models']))
+models=p['models'];models_path=base/'dsh-models.json'
+if models_path.exists():
+ previous=json.loads(models_path.read_text())
+ if 'dsh' in previous:models['dsh']=previous['dsh']
+save(models_path,json.dumps(models))
 save(base/'target-known_hosts',p['known'])
 save(base/'dsh-model.env','REMOTE_MCP_CHECK_API_KEY='+json.dumps(p['api_key'])+'\\n')
 subprocess.run(['node',str(base/'configure-dsh.mjs'),'--home',str(base/'dsh-home'),'--targets',str(targets),'--python',str(base/'venv/bin/python'),'--state',str(base/'dsh-state'),'--workspace',str(base/'cloud-workspace'),'--model',str(base/'dsh-models.json')],check=True,stdout=sys.stderr)

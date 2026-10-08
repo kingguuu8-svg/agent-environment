@@ -634,6 +634,22 @@ node verify_git_context.mjs
 
 VPS4 空闲维护只替换 Host 插件和 Git 摘要模块，原件与权限保留备份。35 条会话日志与投影、27 份输入权、七个工作区分组、云端草稿和原配置保持。三台机器的文件与引用检查通过，运行源码与本地一致，共享环境配置、服务配置和 Caddy 配置的哈希保持，HTTPS 协议入口正常。运行时四份 Git 上下文保留完整状态并使用新的摘要模块；生产验证没有提交模型请求、接管或切换。部署证据位于 `.local/verification-dsh-git-context-deployed.json`。
 
+## 本地模型同步
+
+验证命令：
+
+```bash
+node verify_dsh_models.mjs
+.venv/bin/python verify_dsh_context.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/pnpm/package-manager-store/v11/links/@/npm/11.20.0/61c2e921ea78f7591fa88d88213cbf6ad002cb23f6191f8d2971c6e08712a583/node_modules/npm/bin/npm-cli.js
+.venv/bin/python sync_dsh_models.py --node /home/kingguuu8/.local/node/bin/node
+```
+
+六项配置检查覆盖原 Pi 配置兼容、多个提供商、本地显示名称和能力保留、进程凭据优先级、最小凭据复制、非法配置路径、文件权限、缺失凭据、其他配置与账号记录保留、重复同步和预设重建。25 项原生 Host 与 SSH 上下文回归通过，原来只配置一个提供商的验证环境继续正常运行。
+
+VPS4 隔离 Host 通过原生模型目录核对全部 17 个本地配置，模型名称与推理档位一致。五个不同提供商的真实原生会话分别收到 `MODEL-READY` 回复：CPA Grok 4.7、CPA GLM、ZAI GLM、Qwen3.8 Flash 和 DeepSeek-V4.1-Flash。会话记录中的回复提供商与模型符合所选目标，所有测试消息仅进入隔离会话，临时 Host、会话和凭据已清理。各路由验证一个模型，其余模型完成配置与目录核对；图片请求尚未逐个发送。
+
+上线后原生目录包含 18 个模型选项，保留旧 `cpa/gpt-6-sol`，默认选择与本地相同。36 条原会话日志、已选模型、预设、执行绑定、控制记录、云端草稿与工作区保持。模型配置和相关凭据的权限为 600，原机器、访问入口、服务配置和 Caddy 配置保持。运行源码哈希一致，共享环境 HTTPS 正常，日常会话没有提交测试模型请求。证据位于 `.local/verification-dsh-model-config.json`、`.local/verification-dsh-model-sync.json` 和 `.local/verification-dsh-model-routes.json`。
+
 ## 范围与清理
 
 前述 Pi 终端验证覆盖单用户 Linux、云端直接 SSH 登录目标、Pi 原生工具、工作区上下文、常驻 SDK 会话与额外 HTTP MCP。终端复用 Pi 的主要界面组件，完整 Pi 命令集、文件补全、图片粘贴、远端 skills 与扩展及持久 PTY 仍在后续范围。新设备的反向接入由 DSH 工具桥接连接提供。新提示等待当前任务结束后提交；运行期间可接管、取消和安排工作区切换。实际 NAS 尚未连接。
