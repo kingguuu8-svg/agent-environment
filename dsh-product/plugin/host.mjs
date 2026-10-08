@@ -104,14 +104,14 @@ export class RemoteWorkspaces extends TypertRemoteService {
         "Earlier messages and tool results may refer to a previous machine. Recheck files after switching. Never silently fall back to the cloud or another machine when the target is unavailable.",
         "Use the environment tool to inspect or explicitly call other registered machines, cloud workspaces, or MCP services. This does not change the conversation's default workspace.",
         entry.lastError ? `Target connection error: ${entry.lastError}` : "",
-        context?.git ? `Current Git state:\n${JSON.stringify(context.git)}` : "",
-        ...(context?.agents_files ?? []).map((file) => `Project instructions from ${current.machine}:${file.path}:\n${file.content}`),
+        context?.git ? `${entry.lastError ? "Last known Git state (target unavailable; may be stale)" : "Current Git state"}:\n${JSON.stringify(context.git)}` : "",
+        ...(context?.agents_files ?? []).map((file) => `${entry.lastError ? "Last known project instructions" : "Project instructions"} from ${current.machine}:${file.path}:\n${file.content}`),
       ].filter(Boolean).join("\n\n");
     };
     ctx.systemPrompt.section({ name: "remote-workspace", order: 10, interpolate: false, text: workspacePrompt });
     ctx.on("system-prompt/assemble", async (assembly, context, next) => {
       const state = this.state(context.agent?.session);
-      if (state.current) await this.environment.refresh(state.current.id, context.signal);
+      if (state.current) await this.refreshPromptContext(state.current.id, context.signal);
       const result = await next();
       // DSH assembles before agent/pre-step. Replace this section after the
       // async refresh so the very next request includes the latest facts.
@@ -278,6 +278,39 @@ export class RemoteWorkspaces extends TypertRemoteService {
     const error = this.environment.get(id).lastError;
     if (error) return { ...checked, status: "unavailable", error };
     return checked && Date.now() - checked.checkedAt < 65000 ? checked : { status: "unknown" };
+  }
+  async refreshPromptContext(id, signal) {
+    signal?.throwIfAborted();
+    const entry = this.environment.get(id);
+    const checked = this.connectionChecks.get(id);
+    // A known unreachable default workspace must not hold up cloud reasoning
+    // or explicit calls to another target on every model step.
+    if (checked?.status === "unavailable" && Date.now() - checked.checkedAt < 65000) {
+      entry.lastError = checked.error;
+      return;
+    }
+    const deadline = new AbortController();
+    const refreshSignal = signal ? AbortSignal.any([signal, deadline.signal]) : deadline.signal;
+    const timer = setTimeout(() => deadline.abort(new Error("工作区信息检查超时；可以继续对话或明确操作其他机器。")), 12000);
+    let onAbort;
+    try {
+      await Promise.race([
+        this.environment.refresh(id, refreshSignal),
+        new Promise((_, reject) => {
+          onAbort = () => reject(refreshSignal.reason);
+          if (refreshSignal.aborted) onAbort();
+          else refreshSignal.addEventListener("abort", onAbort, { once: true });
+        }),
+      ]);
+    } catch (error) {
+      signal?.throwIfAborted();
+      entry.lastError = errorMessage(error);
+      this.environment.save();
+    } finally {
+      clearTimeout(timer);
+      if (onAbort) refreshSignal.removeEventListener("abort", onAbort);
+    }
+    if (entry.lastError) this.connectionChecks.set(id, { status: "unavailable", checkedAt: Date.now(), error: entry.lastError });
   }
   async probe(request) {
     checkRequest(request);

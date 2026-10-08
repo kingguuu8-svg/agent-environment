@@ -62,6 +62,45 @@ def run(args):
                 },
                 {"delta": {}, "finish_reason": "stop"},
             ]
+            last_user = max(
+                i
+                for i, message in enumerate(payload["messages"])
+                if message["role"] == "user"
+            )
+            if "DETACHED-CLOUD" in str(payload["messages"][last_user]["content"]):
+                calls = [
+                    call
+                    for message in payload["messages"][last_user + 1 :]
+                    for call in message.get("tool_calls", [])
+                ]
+                if not calls:
+                    chunks = [
+                        {
+                            "delta": {
+                                "role": "assistant",
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": "detached-" + uuid.uuid4().hex,
+                                        "type": "function",
+                                        "function": {
+                                            "name": "environment",
+                                            "arguments": json.dumps(
+                                                {
+                                                    "action": "call",
+                                                    "target": "cloud",
+                                                    "tool": "read",
+                                                    "args": {"path": "AGENTS.md"},
+                                                }
+                                            ),
+                                        },
+                                    }
+                                ],
+                            },
+                            "finish_reason": None,
+                        },
+                        {"delta": {}, "finish_reason": "tool_calls"},
+                    ]
             body = (
                 "".join(
                     "data: "
@@ -90,6 +129,7 @@ def run(args):
     thread.start()
     host = None
     checks = []
+    detached_timings = {}
 
     def passed(name):
         checks.append(name)
@@ -605,6 +645,200 @@ def run(args):
                 extra_workers = workers() - original_workers
                 assert len(extra_workers) == 1
                 paused_worker = extra_workers.pop()
+
+                def queued_worker_input():
+                    # Observe the actual paused worker's pipe without consuming
+                    # it, proving a context read or preflight already started.
+                    descriptor = os.open(
+                        f"/proc/{paused_worker}/fd/0", os.O_RDONLY | os.O_NONBLOCK
+                    )
+                    try:
+                        count = array.array("i", [0])
+                        fcntl.ioctl(descriptor, termios.FIONREAD, count, True)
+                        return count[0]
+                    finally:
+                        os.close(descriptor)
+
+                detached = api.rpc(
+                    "session/create",
+                    {"request": {"workspaceId": slow_pick["workspaceId"]}},
+                )["sessionId"]
+                detached_client = str(uuid.uuid4())
+                detached_control = api.remote(
+                    "control", {"sessionId": detached, "clientId": detached_client}
+                )
+                detached_epoch = detached_control["control"]["epoch"]
+
+                def detached_get(sid=detached, owner=detached_client):
+                    return api.remote("get", {"sessionId": sid, "clientId": owner})
+
+                def detached_prompt(
+                    label,
+                    sid=detached,
+                    owner=detached_client,
+                    credential=detached_epoch,
+                ):
+                    count = len(requests)
+                    api.remote(
+                        "input",
+                        {
+                            "clientId": owner,
+                            "epoch": credential,
+                            "method": "prompt",
+                            "payload": {
+                                "sessionId": sid,
+                                "requestId": str(uuid.uuid4()),
+                                "mode": "queue",
+                                "content": [
+                                    {"type": "text", "text": "DETACHED-CLOUD-" + label}
+                                ],
+                            },
+                        },
+                    )
+                    return count
+
+                def detached_completed(sid=detached, owner=detached_client):
+                    return wait_for(
+                        lambda: detached_get(sid, owner),
+                        lambda value: not value["running"],
+                        timeout=24,
+                    )
+
+                def detached_proof(count, unavailable):
+                    assert len(requests) == count + 2
+                    for payload in requests[count:]:
+                        current_system = "\n".join(
+                            str(message["content"])
+                            for message in payload["messages"]
+                            if message["role"] in {"system", "developer"}
+                        )
+                        assert "Machine: slow" in current_system
+                        assert refreshed_marker in current_system
+                        assert (
+                            "Target connection error:" in current_system
+                        ) == unavailable
+                        assert (
+                            "Last known project instructions" in current_system
+                        ) == unavailable
+                        assert ("Last known Git state" in current_system) == unavailable
+                    assert any(
+                        cloud_marker in str(message["content"])
+                        for message in requests[-1]["messages"]
+                        if message["role"] == "tool"
+                    )
+
+                original_detached = detached_get()
+                try:
+                    os.kill(paused_worker, signal.SIGSTOP)
+                    started = time.monotonic()
+                    count = detached_prompt("BOUNDED")
+                    unavailable = detached_completed()
+                    detached_timings["firstUnavailableTurnSeconds"] = (
+                        time.monotonic() - started
+                    )
+                    assert 10 <= detached_timings["firstUnavailableTurnSeconds"] < 24
+                    detached_proof(count, True)
+                    assert unavailable["current"] == original_detached["current"]
+                    assert unavailable["control"] == original_detached["control"]
+                    assert unavailable["revision"] == original_detached["revision"]
+                    assert unavailable["pending"] is None
+                    assert unavailable["connection"]["status"] == "unavailable"
+                    assert workers() == original_workers | {paused_worker}
+                    passed(
+                        "a paused default device cannot delay explicit cloud work beyond the bounded context check; every model step sees the original target and stale facts"
+                    )
+
+                    started = time.monotonic()
+                    count = detached_prompt("KNOWN-UNAVAILABLE")
+                    detached_completed()
+                    detached_timings["knownUnavailableTurnSeconds"] = (
+                        time.monotonic() - started
+                    )
+                    assert detached_timings["knownUnavailableTurnSeconds"] < 8
+                    detached_proof(count, True)
+                    assert api.read(session, "AGENTS.md")["text"].startswith(
+                        refreshed_marker
+                    )
+                    passed(
+                        "known unavailability skips repeated waits while actual cloud tool results and other SSH workspace reads remain available"
+                    )
+                finally:
+                    if paused_worker in workers():
+                        os.kill(paused_worker, signal.SIGCONT)
+                assert (
+                    api.remote("probe", {"target": slow_pick["binding"]["id"]})[
+                        "status"
+                    ]
+                    == "online"
+                )
+
+                peer = api.rpc(
+                    "session/create",
+                    {"request": {"workspaceId": slow_pick["workspaceId"]}},
+                )["sessionId"]
+                peer_client = str(uuid.uuid4())
+                peer_control = api.remote(
+                    "control", {"sessionId": peer, "clientId": peer_client}
+                )
+                peer_epoch = peer_control["control"]["epoch"]
+                wait_for(queued_worker_input, lambda value: value == 0, timeout=10)
+                try:
+                    os.kill(paused_worker, signal.SIGSTOP)
+                    count = detached_prompt("CANCEL")
+                    pending_bytes = wait_for(queued_worker_input, timeout=10)
+                    detached_prompt("PEER", peer, peer_client, peer_epoch)
+                    wait_for(
+                        queued_worker_input,
+                        lambda value: value > pending_bytes,
+                        timeout=10,
+                    )
+                    api.remote(
+                        "input",
+                        {
+                            "clientId": detached_client,
+                            "epoch": detached_epoch,
+                            "method": "cancel",
+                            "payload": {"sessionId": detached},
+                        },
+                    )
+                    canceled = detached_completed()
+                    assert canceled["current"] == original_detached["current"]
+                    assert canceled["control"] == original_detached["control"]
+                    completed_peer = detached_completed(peer, peer_client)
+                    assert completed_peer["control"] == peer_control["control"]
+                    detached_proof(count, True)
+                    assert all(
+                        "DETACHED-CLOUD-PEER" in str(payload["messages"])
+                        for payload in requests[count:]
+                    )
+                    assert workers() == original_workers | {paused_worker}
+                    passed(
+                        "canceling one context wait sends no model request and preserves another session using the same paused transport"
+                    )
+                finally:
+                    if paused_worker in workers():
+                        os.kill(paused_worker, signal.SIGCONT)
+                instructions.write_text(
+                    instructions.read_text() + "RESTORED-CONTEXT-" + run_id + "\n"
+                )
+                assert (
+                    api.remote("probe", {"target": slow_pick["binding"]["id"]})[
+                        "status"
+                    ]
+                    == "online"
+                )
+                count = detached_prompt("RECOVERED")
+                recovered = detached_completed()
+                detached_proof(count, False)
+                assert "RESTORED-CONTEXT-" + run_id in str(requests[-1]["messages"])
+                assert recovered["current"] == original_detached["current"]
+                assert recovered["control"] == original_detached["control"]
+                assert recovered["revision"] == original_detached["revision"]
+                assert workers() == original_workers | {paused_worker}
+                passed(
+                    "connection recovery refreshes the same device's latest project instructions and clears stale warnings without switching or replacing its worker"
+                )
+
                 before_timeout = get()
                 try:
                     # Pause only this isolated SSH target's real MCP worker;
@@ -639,19 +873,6 @@ def run(args):
                 passed(
                     "a delayed real SSH probe times out within its bound, preserves other targets and recovers"
                 )
-
-                def queued_worker_input():
-                    # Observe the actual paused worker's pipe without consuming
-                    # it, proving preflight started before another window acts.
-                    descriptor = os.open(
-                        f"/proc/{paused_worker}/fd/0", os.O_RDONLY | os.O_NONBLOCK
-                    )
-                    try:
-                        count = array.array("i", [0])
-                        fcntl.ioctl(descriptor, termios.FIONREAD, count, True)
-                        return count[0]
-                    finally:
-                        os.close(descriptor)
 
                 cookies = next(
                     handler.cookiejar
@@ -779,6 +1000,7 @@ def run(args):
                         {
                             "checks": checks,
                             "modelRequests": len(requests),
+                            "detachedTimings": detached_timings,
                             "sessionId": session,
                         },
                         indent=2,
