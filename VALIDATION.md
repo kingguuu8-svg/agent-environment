@@ -1,5 +1,24 @@
 # 验证记录
 
+## 2026-10-08 通用部署与源码分发
+
+当前源码归档在没有 Git 和既有应用依赖的目录中解压，分别安装 Environment 与 DSH 依赖后验证。两套 SSH 目标由同一 Linux 主机上的独立 sshd、主机密钥、端口和目录组成，检查的是实际 SSH/MCP 协议与目标文件效果。验证使用全新的运行时，不读取生产会话或账户配置。
+
+| 验证对象 | 操作与结果 |
+| --- | --- |
+| 独立 Environment | `verify_platform.py`，9 项通过；执行时没有安装 DSH 包 |
+| 通用 DSH 与安装器准备 | `verify_platform.py --dsh --asset-dir …`，13 项通过；原生模型目录、会话切换、双 Host 所有权拒绝、草稿和输入权恢复 |
+| Host 外部接入 | `verify_environment_access.py`，17 项通过；真实工具、HTTP/MCP、并发、取消、撤销与恢复 |
+| 设备配对 | `verify_device_onboarding.py`，20 项通过；增加可配置工具密钥和 Web 端口的权限检查 |
+| Web 界面回归 | `verify_dsh_sidebar.mjs` 13 项、`verify_dsh_handoff_views.mjs` 9 项通过 |
+| 源码包 | `verify_release.py`，3 项通过；私有文件拒绝、内容清单、重复构建一致、无 Git 验证 |
+| 静态与文档检查 | Ruff、Node 语法、Git diff、Markdown 文件链接与禁词检查通过 |
+| Git 历史检查 | 当前引用的历史提交与工作树通过可识别凭据和私有路径检查，匹配内容未打印 |
+
+安装使用固定 npm 与 uv 锁文件。fd 官方归档的首次网络下载在该环境遇到超时；完整安装器准备显式复用已有的官方依赖缓存，并逐个核对 SHA256，未复用账户、设备登记或会话。`systemd-analyze --user verify` 确认生成的服务文件可解析，含空格、中文与百分号的运行时路径通过检查。
+
+本轮没有真实模型请求。macOS、Windows 的原生安装，外网新下载条件，以及 GitHub Actions 的远端执行结果仍待对应环境验证。源代码、部署步骤与 CI 已形成可审阅的候选版本。
+
 ## DSH Web 产品
 
 2026 年 10 月 7 日，DSH Web Host 已部署在 VPS4，VPS1 与当前电脑均已接入。真实模型使用 `cpa/gpt-6-sol`，工具使用锁定的 Pi 1.0.2；DSH 使用 0.2.0-rc.2。下面的结果对应 `feature/dsh-remote-workspaces` 分支。
@@ -53,25 +72,25 @@ HTTP MCP 验证使用随机工具名，提示词只描述需要的功能。模�
 复现本次本机工具与 DSH 检查：
 
 ```bash
-.venv/bin/python verify_local.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
-.venv/bin/python verify_workspace_local.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
+.venv/bin/python verify_local.py --node /home/demo-user/.local/node/bin/node --npm /home/demo-user/.local/share/remote-dsh-device/npm
+.venv/bin/python verify_workspace_local.py --node /home/demo-user/.local/node/bin/node --npm /home/demo-user/.local/share/remote-dsh-device/npm
 dsh web --remote --no-open
-.venv/bin/python verify_dsh.py --url-file /home/kingguuu8/.cache/remote-dsh/a36ca3ce857334ca.json --origin http://127.0.0.1:3081
-.venv/bin/python verify_dsh_recovery.py --config .local/vps-check.json --url-file /home/kingguuu8/.cache/remote-dsh/a36ca3ce857334ca.json --workspace .local/dsh-user-demo
+.venv/bin/python verify_dsh.py --url-file /home/demo-user/.cache/remote-dsh/a36ca3ce857334ca.json --origin http://127.0.0.1:3081
+.venv/bin/python verify_dsh_recovery.py --config .local/vps-check.json --url-file /home/demo-user/.cache/remote-dsh/a36ca3ce857334ca.json --workspace .local/dsh-user-demo
 .venv/bin/python verify_dsh_mcp.py --models .local/dsh-dev/models.json --model-env .local/dsh-dev/model.env
 node verify_mcp_discovery.mjs
-.venv/bin/python verify_dsh_discovery.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
-.venv/bin/python verify_dsh_context.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
-.venv/bin/python verify_dsh_ownership.py --node /home/kingguuu8/.local/node/bin/node
-.venv/bin/python verify_dsh_creation.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
-/home/kingguuu8/.local/node/bin/node verify_dsh_client.mjs
+.venv/bin/python verify_dsh_discovery.py --node /home/demo-user/.local/node/bin/node --npm /home/demo-user/.local/share/remote-dsh-device/npm
+.venv/bin/python verify_dsh_context.py --node /home/demo-user/.local/node/bin/node --npm /home/demo-user/.local/share/remote-dsh-device/npm
+.venv/bin/python verify_dsh_ownership.py --node /home/demo-user/.local/node/bin/node
+.venv/bin/python verify_dsh_creation.py --node /home/demo-user/.local/node/bin/node --npm /home/demo-user/.local/share/remote-dsh-device/npm
+/home/demo-user/.local/node/bin/node verify_dsh_client.mjs
 node verify_dsh_drafts.mjs
-.venv/bin/python verify_dsh_cloud_drafts.py --node /home/kingguuu8/.local/node/bin/node
+.venv/bin/python verify_dsh_cloud_drafts.py --node /home/demo-user/.local/node/bin/node
 node verify_dsh_files.mjs
 node dsh-product/sync-file-search.mjs --check
 node verify_workspace_references.mjs
-.venv/bin/python verify_dsh_references.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
-.venv/bin/python verify_dsh_launcher.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
+.venv/bin/python verify_dsh_references.py --node /home/demo-user/.local/node/bin/node --npm /home/demo-user/.local/share/remote-dsh-device/npm
+.venv/bin/python verify_dsh_launcher.py --node /home/demo-user/.local/node/bin/node --npm /home/demo-user/.local/share/remote-dsh-device/npm
 ```
 
 恢复脚本会暂时停止设备连接和重启 Host，应在空闲时运行。私有启动信息与完整验证记录位于忽略目录中。该版本验证了个人 Linux 环境；其他操作系统、多人权限隔离、远端扩展与持久交互式终端尚未覆盖。安装和维护方式见 [云端 DSH](DSH_REMOTE.md)。
@@ -344,8 +363,8 @@ Host 现在将绑定会话的原生补全请求发送到当前目标 worker，�
 
 ```bash
 node verify_environment_recovery.mjs
-uv run python verify_environment_recovery.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
-uv run python verify_dsh_environment_recovery.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
+uv run python verify_environment_recovery.py --node /home/demo-user/.local/node/bin/node --npm /home/demo-user/.local/share/remote-dsh-device/npm
+uv run python verify_dsh_environment_recovery.py --node /home/demo-user/.local/node/bin/node --npm /home/demo-user/.local/share/remote-dsh-device/npm
 ```
 
 新版已部署到 VPS4，只替换 `environment.mjs`，原件与权限保留备份。35 个会话日志及投影、26 个输入权记录、七个工作区分组、六份配置、机器清单与云端草稿保持；三台机器的文件与引用检查通过。原页面只读刷新后保留会话、机器、目录和查看权限，目标已连接。生产检查没有发送消息、接管或切换，部署证据位于 `.local/verification-dsh-connection-recovery-deployed.json`。
@@ -402,9 +421,9 @@ VPS 验证从已认证 Web 获取独立安装包，在仅有系统 PATH 的全�
 
 ```bash
 .venv/bin/python verify_device_onboarding.py
-.venv/bin/python verify_device_bridge.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
+.venv/bin/python verify_device_bridge.py --node /home/demo-user/.local/node/bin/node --npm /home/demo-user/.local/share/remote-dsh-device/npm
 dsh web --remote --no-open
-.venv/bin/python verify_device_vps.py --url-file /home/kingguuu8/.cache/remote-dsh/a36ca3ce857334ca.json
+.venv/bin/python verify_device_vps.py --url-file /home/demo-user/.cache/remote-dsh/a36ca3ce857334ca.json
 ```
 
 VPS 检查应在云端会话空闲时运行，清理临时登记会重启 Host。验证报告位于忽略目录中的 `.local/verification-device-onboarding.json`、`.local/verification-device-bridge.json` 与 `.local/verification-device-vps.json`；部署文件的 SHA256 和回滚位置记录在 `.local/dsh-device-platform-deployment.json`。
@@ -425,7 +444,7 @@ VPS 检查应在云端会话空闲时运行，清理临时登记会重启 Host�
 复现进度检查：
 
 ```bash
-.venv/bin/python verify_device_feedback.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
+.venv/bin/python verify_device_feedback.py --node /home/demo-user/.local/node/bin/node --npm /home/demo-user/.local/share/remote-dsh-device/npm
 ```
 
 报告位于 `.local/verification-device-feedback.json`。
@@ -453,7 +472,7 @@ VPS 检查应在云端会话空闲时运行，清理临时登记会重启 Host�
 复现命令如下。本机原有 npm 存在依赖加载错误，loopback 验证使用独立 npm 10.9.8；VPS 使用已有 Node 与 npm。
 
 ~~~bash
-uv run python verify_cloud_local.py --node /home/kingguuu8/.local/node/bin/node --npm '/home/kingguuu8/Desktop/main/codex fandai/remote-mcp-demo/.local/npm-clean/package/bin/npm-cli.js'
+uv run python verify_cloud_local.py --node /home/demo-user/.local/node/bin/node --npm '/home/demo-user/Desktop/main/codex fandai/remote-mcp-demo/.local/npm-clean/package/bin/npm-cli.js'
 uv run python verify_cloud_vps.py --config .local/vps-check.json --agent-model cpa/gpt-6-sol
 uv run python verify_deployed_vps.py --config .local/vps-check.json
 ~~~
@@ -502,9 +521,9 @@ VPS 1 在 /root/.local/share/remote-mcp-demo 安装运行时，入口位于 /usr
 本机已有 npm 在执行安装时出现依赖加载错误，验证使用独立 npm 10.9.8。实际复现命令为：
 
 ~~~bash
-uv run python verify_local.py --node /home/kingguuu8/.local/node/bin/node --npm '/home/kingguuu8/Desktop/main/codex fandai/remote-mcp-demo/.local/npm-clean/package/bin/npm-cli.js'
+uv run python verify_local.py --node /home/demo-user/.local/node/bin/node --npm '/home/demo-user/Desktop/main/codex fandai/remote-mcp-demo/.local/npm-clean/package/bin/npm-cli.js'
 uv run python verify_vps.py --config .local/vps-check.json
-uv run python verify_workspace_local.py --node /home/kingguuu8/.local/node/bin/node --npm '/home/kingguuu8/Desktop/main/codex fandai/remote-mcp-demo/.local/npm-clean/package/bin/npm-cli.js'
+uv run python verify_workspace_local.py --node /home/demo-user/.local/node/bin/node --npm '/home/demo-user/Desktop/main/codex fandai/remote-mcp-demo/.local/npm-clean/package/bin/npm-cli.js'
 uv run python verify_workspace_vps.py --config .local/vps-check.json --agent-model cpa/gpt-6-sol
 ~~~
 
@@ -582,8 +601,8 @@ vps1__bash
 2026 年 10 月 8 日，共享环境增加独立 HTTPS 与 MCP 入口。接入文件保存网址、账户和密钥，原生 Host 继续持有唯一的工作区登记与工具连接。验证对应本轮 `environment-access.mjs` 与 Host 插件源码，凭据保存在 Git 忽略目录，文件权限为 600。
 
 ```bash
-.venv/bin/python verify_environment_access.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/pnpm/package-manager-store/v11/links/@/npm/11.20.0/61c2e921ea78f7591fa88d88213cbf6ad002cb23f6191f8d2971c6e08712a583/node_modules/npm/bin/npm-cli.js
-.venv/bin/python verify_dsh_ownership.py --node /home/kingguuu8/.local/node/bin/node
+.venv/bin/python verify_environment_access.py --node /home/demo-user/.local/node/bin/node --npm /home/demo-user/.local/share/pnpm/package-manager-store/v11/links/@/npm/11.20.0/61c2e921ea78f7591fa88d88213cbf6ad002cb23f6191f8d2971c6e08712a583/node_modules/npm/bin/npm-cli.js
+.venv/bin/python verify_dsh_ownership.py --node /home/demo-user/.local/node/bin/node
 .venv/bin/python deploy_environment_access.py
 .venv/bin/python verify_environment_access_public.py
 ```
@@ -606,7 +625,7 @@ node verify_dsh_sidebar.mjs
 node verify_dsh_handoff_views.mjs
 node verify_dsh_drafts.mjs
 node verify_dsh_client.mjs
-.venv/bin/python verify_dsh_creation.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/pnpm/package-manager-store/v11/links/@/npm/11.20.0/61c2e921ea78f7591fa88d88213cbf6ad002cb23f6191f8d2971c6e08712a583/node_modules/npm/bin/npm-cli.js
+.venv/bin/python verify_dsh_creation.py --node /home/demo-user/.local/node/bin/node --npm /home/demo-user/.local/share/pnpm/package-manager-store/v11/links/@/npm/11.20.0/61c2e921ea78f7591fa88d88213cbf6ad002cb23f6191f8d2971c6e08712a583/node_modules/npm/bin/npm-cli.js
 ```
 
 13 项侧栏检查使用锁定版本的原生 `WorkspaceBrowser`、原生视图存储和实际插件源码。验证机器与目录归属、切换完成前后的位置、同名路径、保留自定义名称、默认目录名称、未登记目录加号、同一会话菜单与打开操作、归档筛选、目录树、平铺列表和主机折叠恢复。初次目录读取失败后可以刷新恢复，根数据使用 DSH 实际发布契约，插件卸载后移除刷新监听。纯组件检查替换图标、弹窗与时间显示，生产网页确认实际样式与原生组件组合。
@@ -623,7 +642,7 @@ VPS4 部署保留源码、原生侧栏包文件与权限备份。35 条会话日
 
 ```bash
 node verify_git_context.mjs
-.venv/bin/python verify_dsh_context.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/pnpm/package-manager-store/v11/links/@/npm/11.20.0/61c2e921ea78f7591fa88d88213cbf6ad002cb23f6191f8d2971c6e08712a583/node_modules/npm/bin/npm-cli.js
+.venv/bin/python verify_dsh_context.py --node /home/demo-user/.local/node/bin/node --npm /home/demo-user/.local/share/pnpm/package-manager-store/v11/links/@/npm/11.20.0/61c2e921ea78f7591fa88d88213cbf6ad002cb23f6191f8d2971c6e08712a583/node_modules/npm/bin/npm-cli.js
 ```
 
 八项摘要检查覆盖真实 Git 的干净状态、暂存与未暂存重叠、重命名、分离 HEAD 和合并冲突，以及过长路径、读取失败、异常输出和离线缓存。子模块状态与 Windows 路径分隔符通过协议输入验证。状态预览限制八条、800 字符，过长条目整条省略；仓库根目录仅在与工作区不同时展示。完整输入对象保持原值。
@@ -640,8 +659,8 @@ VPS4 空闲维护只替换 Host 插件和 Git 摘要模块，原件与权限保�
 
 ```bash
 node verify_dsh_models.mjs
-.venv/bin/python verify_dsh_context.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/pnpm/package-manager-store/v11/links/@/npm/11.20.0/61c2e921ea78f7591fa88d88213cbf6ad002cb23f6191f8d2971c6e08712a583/node_modules/npm/bin/npm-cli.js
-.venv/bin/python sync_dsh_models.py --node /home/kingguuu8/.local/node/bin/node
+.venv/bin/python verify_dsh_context.py --node /home/demo-user/.local/node/bin/node --npm /home/demo-user/.local/share/pnpm/package-manager-store/v11/links/@/npm/11.20.0/61c2e921ea78f7591fa88d88213cbf6ad002cb23f6191f8d2971c6e08712a583/node_modules/npm/bin/npm-cli.js
+.venv/bin/python sync_dsh_models.py --node /home/demo-user/.local/node/bin/node
 ```
 
 六项配置检查覆盖原 Pi 配置兼容、多个提供商、本地显示名称和能力保留、进程凭据优先级、最小凭据复制、非法配置路径、文件权限、缺失凭据、其他配置与账号记录保留、重复同步和预设重建。25 项原生 Host 与 SSH 上下文回归通过，原来只配置一个提供商的验证环境继续正常运行。

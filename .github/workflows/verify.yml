@@ -1,0 +1,57 @@
+name: Verify source and cross-device workflows
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [environment, dsh]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+      - name: Prepare isolated SSH testing
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssh-server ripgrep
+          sudo install -d -m 755 /run/sshd
+      - name: Install locked dependencies
+        run: sh scripts/setup.sh "${{ matrix.mode }}"
+      - name: Check source
+        run: |
+          uv run ruff check .
+          python3 scripts/check_release.py --history
+          .venv/bin/python verify_release.py
+      - name: Verify standalone environment
+        if: matrix.mode == 'environment'
+        run: .venv/bin/python verify_platform.py
+      - name: Verify native DSH and onboarding
+        if: matrix.mode == 'dsh'
+        run: |
+          .venv/bin/python verify_platform.py --dsh
+          .venv/bin/python verify_environment_access.py
+          .venv/bin/python verify_device_onboarding.py
+          node verify_dsh_sidebar.mjs
+      - name: Build source release
+        if: matrix.mode == 'dsh'
+        run: python3 scripts/build_release.py
+      - uses: actions/upload-artifact@v4
+        if: matrix.mode == 'dsh'
+        with:
+          name: agent-environment-source
+          path: .local/releases/*

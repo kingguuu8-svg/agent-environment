@@ -547,7 +547,7 @@ def install(args):
                     "known_hosts_file": str(base / "cloud-known_hosts"),
                     "base": result["base"],
                     "node": result["node"],
-                    "webPort": 3080,
+                    "webPort": result.get("webPort", 3080),
                 },
             }
             save(

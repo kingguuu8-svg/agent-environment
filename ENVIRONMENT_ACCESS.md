@@ -1,6 +1,6 @@
 # 接入共享环境
 
-把私有接入文件交给现有 Agent，让它读取网址上的协议，即可使用 VPS4 管理的机器、工作区、Pi 工具和额外 MCP 服务。Agent 使用自己的网络请求或终端工具完成接入，会话保留在原客户端。
+把私有接入文件交给现有 Agent，让它读取网址上的协议，即可使用 Host 管理的机器、工作区、Pi 工具和额外 MCP 服务。Agent 使用自己的网络请求或终端工具完成接入，会话保留在原客户端。
 
 接入文件包含 `url`、`account`、`key` 三个字段。入口公开提供接入协议；资源发现和执行使用 HTTP Basic 认证，账户对应用户名，密钥对应密码。凭据只通过 HTTPS 请求头发送。该版本沿用现有个人环境的权限，能够操作全部已登记资源，工具使用目标登录用户的系统权限。
 
@@ -21,14 +21,10 @@ Agent 先 GET 入口网址，再向协议中的 HTTP 地址 POST JSON。协议�
 
 ## 部署与凭据
 
-部署脚本复用 VPS4 的 Caddy HTTPS 代理，新增独立站点；环境服务仅监听 `127.0.0.1:3180`。默认网址通过 VPS4 公网 IP 的 sslip.io 域名访问，Caddy 申请并续期受信任证书，也可用 `--url` 指定已解析到 VPS4 的独立 HTTPS 域名。
+Environment 可以独立运行，也可以共用 DSH Host 已有的环境。通用安装和双机器任务见[快速开始](docs/QUICKSTART.md)。独立模式运行 `agent_environment.py init` 后生成私有 `connection.md`；DSH 模式使用同一入口，保持云端会话的工作区、草稿和输入权。
 
-```bash
-.venv/bin/python deploy_environment_access.py
-```
+服务仅监听 loopback。SSH 转发用于本地接入，公网入口可使用 Caddy 等 HTTPS 代理。初始化时指定 `--url https://env.example.com/`，运行时会生成相应的代理配置片段。
 
-默认生成 `.local/共享环境接入.md`，权限为 600，目录由 Git 忽略。再次部署沿用文件中的账户和密钥。脚本先确认生产会话空闲，保存源码、配置及会话备份，再启动入口；它核对现有会话、输入权、工作区分组、草稿和原配置，并通过公网 HTTPS 调用真实工具。部署异常时回滚源码、启动配置和 Caddy 路由，备份位置记录在 `.local/environment-access-deployment.json`。
+私有 `environment-access.json` 只保存账户与 `SHA256(account + NUL + key)` 摘要。设置 `enabled: false` 可停止后续访问；替换摘要会在下一次请求撤销旧密钥，包括已有 MCP 会话。URL 或端口改变后需要重启服务并同步接入文件。
 
-VPS4 的私有配置为运行时下的 `dsh-state/environment-access.json`，仅保存账户与 `SHA256(account + NUL + key)` 摘要。设置 `enabled: false` 可停止后续访问；替换摘要可撤销旧密钥，HTTP 和已建立的 MCP 会话在下一次请求时重新检查凭据。调整网址或监听端口后重启 Host。已有安装与会话继续使用原来的入口。
-
-隔离验证运行 `verify_environment_access.py`，使用真实 SSH、原生 Host、官方 MCP SDK 与 Pi 工具；部署后的证据与边界见 [验证记录](VALIDATION.md)。
+现有个人部署的 `deploy_environment_access.py` 仍保留，用于按 `vps-check` 配置更新旧 Host。新安装使用通用入口。隔离验证和权限范围见[验证方法](docs/VERIFICATION.md)。

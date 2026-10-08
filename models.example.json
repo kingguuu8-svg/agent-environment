@@ -1,0 +1,25 @@
+{
+  "dsh": {
+    "piAI": {
+      "providers": {
+        "my-provider": {
+          "api": "openai-completions",
+          "baseURL": "https://your-model-provider.example/v1",
+          "apiKeyEnv": "AGENT_MODEL_KEY",
+          "models": [
+            {
+              "id": "your-model-id",
+              "name": "My model",
+              "contextWindow": 128000,
+              "maxTokens": 8192
+            }
+          ]
+        }
+      }
+    },
+    "defaultSelection": {
+      "provider": "my-provider",
+      "model": "your-model-id"
+    }
+  }
+}

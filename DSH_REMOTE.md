@@ -1,6 +1,6 @@
 # 云端 DSH
 
-在任意已接入设备的项目目录运行 `dsh web --remote`，即可打开 VPS4 上的 DSH。Agent、上下文和会话记录保存在 VPS4；七个 Pi 工具在会话当前选定的机器与目录执行。当前已接入 VPS4、VPS1 和这台电脑。
+在任意已接入设备的项目目录运行 `dsh web --remote`，即可打开 云端 Host 上的 DSH。Agent、上下文和会话记录保存在 云端 Host；七个 Pi 工具在会话当前选定的机器与目录执行。通用安装见[快速开始](docs/QUICKSTART.md)。
 
 ## 开始使用
 
@@ -64,7 +64,7 @@ Git 信息使用摘要：干净仓库显示分支和 `clean`；有修改时显�
 
 同一会话可以在多个窗口查看，每次只有一个窗口能提交输入。刷新页面、插件更新和云端服务重启会保留原窗口的输入权；其他窗口的输入框保持只读，点击“接管输入”可接力操作。接管结果也会在服务重启后保留。需要独立继续一条思路时，使用 DSH 的“在新对话中分支”：新会话继承历史与工作区，输入权独立。
 
-当前输入窗口的文字草稿会自动保存到 VPS4。另一台设备打开同一会话，输入框尚无本机内容时会恢复云端草稿，接管后可以继续编辑。已有本机文字优先保留；另一窗口接管、改写或发送后，刷新仍恢复本窗口的原稿。不同会话的草稿分别保存。顶部显示“草稿已同步”“正在保存草稿”或“草稿暂存本机”，只有当前控制窗口能够更新云端草稿。
+当前输入窗口的文字草稿会自动保存到 云端 Host。另一台设备打开同一会话，输入框尚无本机内容时会恢复云端草稿，接管后可以继续编辑。已有本机文字优先保留；另一窗口接管、改写或发送后，刷新仍恢复本窗口的原稿。不同会话的草稿分别保存。顶部显示“草稿已同步”“正在保存草稿”或“草稿暂存本机”，只有当前控制窗口能够更新云端草稿。
 
 本机与云端的文字不同时，顶部显示“本机原稿 · 云端有另一份”。点击“查看草稿”可以预览云端文字，也能恢复之前替换时保留的原稿；查看者可在面板内“接管并接续云端草稿”。预览和取消保持当前输入权。确认前先保存本机原稿，刷新页面后仍可恢复；多次选择分别保留不同原稿。备份按窗口保存，关窗后的恢复取决于浏览器，云端继续保存当前控制窗口选中的草稿。云端版本已变化时，点击“重新查看”后再次选择。
 
@@ -84,13 +84,13 @@ Git 信息使用摘要：干净仓库显示分支和 `clean`；有修改时显�
 
 默认的 `read`、`write`、`edit`、`bash`、`grep`、`find`、`ls` 都来自 `@earendil-works/pi-coding-agent@1.0.2`。MCP 负责传输工具调用与取消，目标进程负责执行。工作区决定相对路径的起点，工具使用目标登录用户的系统权限。界面中的“目标用户权限”说明这一点；VPS1 目前使用 root。
 
-展开成功的 `edit` 工具行，可以看到 Pi 实际应用的修改差异，并通过文件名打开当前远端文件。差异随会话保存在 VPS4，刷新或服务重启后仍可查看。失败编辑显示原错误；旧历史沿用原展示，因为当时没有保存差异。模型继续收到 Pi 的原始结果文本。
+展开成功的 `edit` 工具行，可以看到 Pi 实际应用的修改差异，并通过文件名打开当前远端文件。差异随会话保存在 云端 Host，刷新或服务重启后仍可查看。失败编辑显示原错误；旧历史沿用原展示，因为当时没有保存差异。模型继续收到 Pi 的原始结果文本。
 
 Agent 还有一个 `environment` 工具，可以列出已经登记的工作区与 MCP 服务，或明确调用其中一个目标的工具。例如可以让它在本机项目工作时，同时检查云端服务。显式跨目标调用保持会话的默认工作区。
 
 额外 MCP 服务的首次连接与完整工具枚举最多等待约 12 秒。部分服务离线时，环境列表仍返回正常服务的工具，并标明失败服务的原因；恢复后再次发现即可使用原服务。点击“停止生成”可以结束当前发现等待，其他会话共享的连接继续保持。已经连接成功的服务沿用工具各自的执行时限。
 
-额外 HTTP MCP 服务可写入 VPS4 的 `dsh-targets.json` 中的 `mcp` 字段，重启 Host 后生效；格式与已有 `environment.mjs` 一致。新机器登记后，目录选择器重新读取配置，无需重启 Host。
+额外 HTTP MCP 服务可写入 云端 Host 的 `dsh-targets.json` 中的 `mcp` 字段，重启 Host 后生效；格式与已有 `environment.mjs` 一致。新机器登记后，目录选择器重新读取配置，无需重启 Host。
 
 ## 接入新设备
 
@@ -112,7 +112,7 @@ Linux 已在 VPS1 的全新普通用户上实际安装验证。macOS 与 Windows
 
 Linux 需要可用的 systemd 用户服务，缺少系统依赖时会请求 sudo；Python 版本过低时，在用户目录准备运行时。macOS 缺少 Python 时，会请求管理员密码安装官方 Python。Windows 自动准备用户目录内的 Python、Node.js 和 Git Bash，缺少 OpenSSH 客户端时，需要以管理员运行一次。首次安装需要访问 Python、Node、npm 和 GitHub 的下载服务。安装包携带已校验的文件查找依赖，并在安装时提前准备 Pi 的搜索依赖。
 
-新设备只向 VPS4 发起出站 SSH 连接，本机工具桥接端点仅监听 loopback。云端通过反向连接调用原生 Pi 工具，使用安装者的系统权限。安装包包含工具桥接程序和 `dsh` 入口；Agent、模型配置和记录保存在 VPS4。
+新设备只向 云端 Host 发起出站 SSH 连接，本机工具桥接端点仅监听 loopback。云端通过反向连接调用原生 Pi 工具，使用安装者的系统权限。安装包包含工具桥接程序和 `dsh` 入口；Agent、模型配置和记录保存在 云端 Host。
 
 安装包中的临时配对凭据有效期为 15 分钟，只能登记一台设备。下载后请留在自己的设备上。安装失败可重跑同一文件；登记成功后，即使临时凭据已过期，重跑也沿用本机保存的设备身份。尚未完成登记且凭据过期时，在页面重新下载。并发安装、配对响应丢失与云端部分写入使用同一份请求恢复，机器编号和端口由平台分配。
 
@@ -120,9 +120,9 @@ Linux 需要可用的 systemd 用户服务，缺少系统依赖时会请求 sudo
 
 已接入的 `desktop` 和 VPS1 沿用原有 SSH 工具连接。维护已有连接仍可使用仓库中的 `setup-dsh-device.py`；Web 下载的安装包使用工具桥接连接。
 
-## VPS4 部署
+## 旧部署兼容
 
-SSH 配置沿用 `vps-check.example.json`：`gateway` 对应 VPS4，`target` 对应 VPS1。两台主机的密钥已登记在部署机的 known_hosts 中，VPS4 具备 systemd 用户服务和 Python venv。部署脚本读取部署机已有 OpenCode 的 OpenAI-compatible 提供商与 API 认证配置。
+以下脚本保留现有个人部署的双主机配置；新安装使用[通用部署](docs/DEPLOYMENT.md)。SSH 配置沿用 `vps-check.example.json`：`gateway` 对应 云端 Host，`target` 对应 VPS1。两台主机的密钥已登记在部署机的 known_hosts 中，云端 Host 具备 systemd 用户服务和 Python venv。部署脚本读取部署机已有 OpenCode 的 OpenAI-compatible 提供商与 API 认证配置。
 
 ```bash
 uv run python deploy_dsh_vps.py --config .local/vps-check.json --model cpa/gpt-6-sol
@@ -132,18 +132,18 @@ uv run python deploy_dsh_vps.py --config .local/vps-check.json --model cpa/gpt-6
 
 | 内容 | 位置 |
 | --- | --- |
-| VPS4 运行时 | `/home/ubuntu/.local/share/remote-mcp-demo` |
+| 云端 Host 运行时 | `/home/ubuntu/.local/share/remote-mcp-demo` |
 | DSH 配置与原生会话 | 运行时下的 `dsh-home` |
 | 工作区绑定、环境清单、私有启动信息 | 运行时下的 `dsh-state` |
 | 默认云端项目目录 | 运行时下的 `cloud-workspace` |
 | 机器配置与模型配置 | `dsh-targets.json`、`dsh-models.json` |
 | 模型凭据 | `dsh-model.env`，权限 600 |
 
-VPS4 Web 只监听 loopback 的 3080，通过 SSH 转发访问。设备入口密钥限制为固定机器身份的启动命令、Web 转发及分配给该设备的反向端口。临时配对密钥只允许配对命令，带有效期并禁用转发。安装包固定 VPS4 主机公钥；工具桥接请求使用单独的私有认证令牌。该版本服务于同一位用户；共享 Web 登录具备整个个人环境的操作权限。
+云端 Host Web 只监听 loopback 的 3080，通过 SSH 转发访问。设备入口密钥限制为固定机器身份的启动命令、Web 转发及分配给该设备的反向端口。临时配对密钥只允许配对命令，带有效期并禁用转发。安装包固定 云端 Host 主机公钥；工具桥接请求使用单独的私有认证令牌。该版本服务于同一位用户；共享 Web 登录具备整个个人环境的操作权限。
 
 ## 模型同步
 
-从部署电脑读取本地 DSH 的模型设置，并同步到 VPS4：
+从部署电脑读取本地 DSH 的模型设置，并同步到 云端 Host：
 
 ```bash
 .venv/bin/python sync_dsh_models.py
@@ -151,13 +151,13 @@ VPS4 Web 只监听 loopback 的 3080，通过 SSH 转发访问。设备入口密
 
 默认读取 `~/.dsh` 的 `desktop` 预设；使用 `--profile web` 可选择本地 Web 预设，`--home` 可指定 DSH 配置目录。同步保留模型名称、接口协议、图片能力、上下文容量、推理档位和本地默认选择。已有会话保留已选模型，远端原有提供商继续可用。
 
-同步命令先启动隔离的云端 Host 检查实际模型目录，日常会话空闲后保存备份并更新配置。原会话、工作区、草稿和输入权完成核对后才报告成功，失败时恢复原件。只传输这些提供商引用的凭据，通过 SSH 写入 VPS4 原生凭据文件，权限为 600；其他凭据与账号登录记录沿用原值。
+同步命令先启动隔离的云端 Host 检查实际模型目录，日常会话空闲后保存备份并更新配置。原会话、工作区、草稿和输入权完成核对后才报告成功，失败时恢复原件。只传输这些提供商引用的凭据，通过 SSH 写入 云端 Host 原生凭据文件，权限为 600；其他凭据与账号登录记录沿用原值。
 
 模型配置保存在运行时的 `dsh-models.json` 中，原生 DSH 配置存入其 `dsh` 字段。重新配置预设与再次部署会沿用同步结果。本地后续增加模型时，重新执行同步命令即可更新。
 
 ## 维护与恢复
 
-在 VPS4 查看或重启 Host：
+在 云端 Host 查看或重启 Host：
 
 ```bash
 systemctl --user status remote-dsh.service
@@ -183,7 +183,7 @@ systemctl --user list-units 'remote-dsh-web-*'
 
 macOS 的后台任务位于 `~/Library/LaunchAgents/dev.remote-dsh.*.plist`，Windows 位于用户启动目录中的 `RemoteDSH-*.lnk`。三个系统的连接日志都保存在 `~/.local/share/remote-dsh-device/jobs`，断开后后台任务会重连。需要修复依赖或恢复连接时，可以重跑安装器。
 
-暂停云端产品可在 VPS4 执行 `systemctl --user disable --now remote-dsh.service`；配置与会话继续保留。停止新 Linux 设备的接入可执行 `systemctl --user disable --now remote-dsh-device-link.service remote-dsh-device-bridge.service`，再停止列表中的 Web 转发服务；既有 `desktop` 的工具服务名为 `remote-dsh-device-sshd.service`。若恢复此前的本机 DSH 入口，安装器保存的命令位于入口目录的 `.dsh-before-remote`，Windows 为 `.dsh-before-remote.cmd`。
+暂停云端产品可在 云端 Host 执行 `systemctl --user disable --now remote-dsh.service`；配置与会话继续保留。停止新 Linux 设备的接入可执行 `systemctl --user disable --now remote-dsh-device-link.service remote-dsh-device-bridge.service`，再停止列表中的 Web 转发服务；既有 `desktop` 的工具服务名为 `remote-dsh-device-sshd.service`。若恢复此前的本机 DSH 入口，安装器保存的命令位于入口目录的 `.dsh-before-remote`，Windows 为 `.dsh-before-remote.cmd`。
 
 升级前备份 `dsh-home`、`dsh-state` 和私有配置。回滚使用同一备份对应的源码与锁定依赖，重新生成 profile 后重启 Host。原有 Pi 云端服务使用独立会话目录，可继续通过 `pi --remote` 访问。
 
@@ -193,7 +193,7 @@ macOS 的后台任务位于 `~/Library/LaunchAgents/dev.remote-dsh.*.plist`，Wi
 
 Web 基于 DSH `0.2.0-rc.2`，通过插件复用其会话、聊天、分支、压缩与文件预览。安装后运行 `node dsh-product/patch-dsh.mjs` 应用有版本检查的兼容修改，使原生文件侧栏跟随工作区、输入框跟随控制权、文字草稿按窗口恢复，并让插件事件携带 DSH 要求的兼容标记。左侧列表在原生工作区浏览器上增加主机分组，展示归属读取当前执行绑定；会话菜单、搜索、排序与归档沿用 DSH，持久工作区登记保持原值。该脚本也补齐网页运行包中已有 Markdown 上下文读取接口的导出，以保留回复文件来源、外部链接和原生图片能力；补丁核对固定构建的哈希，重复运行保持原值。会话选择通过插件保留窗口记录。升级 DSH 需要重新检查这些接口。
 
-新建恢复复用 DSH 原生的客户端指定编号与幂等接纳。浏览器在请求前按工作区保存未确认编号，成功打开后清除；恢复记录保存在当前窗口，关窗后的恢复取决于浏览器。浏览器无法保存恢复信息时，先提示释放存储空间，再允许创建。会话记录继续保存在 VPS4，原生历史格式保持。
+新建恢复复用 DSH 原生的客户端指定编号与幂等接纳。浏览器在请求前按工作区保存未确认编号，成功打开后清除；恢复记录保存在当前窗口，关窗后的恢复取决于浏览器。浏览器无法保存恢复信息时，先提示释放存储空间，再允许创建。会话记录继续保存在 云端 Host，原生历史格式保持。
 
 部署脚本会在停止 Host 后修复早期演示记录中缺少标记的插件事件，原日志备份留在同一目录的 `.before-remote-events-*` 文件中。修复只增加事件外层的兼容字段，保留消息、绑定数据、顺序和时间。
 
@@ -203,7 +203,7 @@ Web 基于 DSH `0.2.0-rc.2`，通过插件复用其会话、聊天、分支、�
 
 搜索源码和 MIT 许可由 `node dsh-product/sync-file-search.mjs` 同步到现有 `workspace-files.mjs`，使用 `--check` 核对生成内容。目标设备沿用现有工具包安装流程。升级 DSH 时需重新核对上游搜索和客户端引用接口，并运行 `verify_workspace_references.mjs` 与 `verify_dsh_references.py`。
 
-可重复验证见 [验证记录](VALIDATION.md)。`verify_dsh.py` 检查真实模型、排队切换、重复请求、输入权和文件作用域；`verify_dsh_recovery.py` 会暂时停止本机反向连接并重启 VPS4 Host，应在空闲时执行。`verify_dsh_mcp.py` 使用独立 Host 与随机工具名验证新 HTTP MCP 的首次发现和调用。
+可重复验证见 [验证记录](VALIDATION.md)。`verify_dsh.py` 检查真实模型、排队切换、重复请求、输入权和文件作用域；`verify_dsh_recovery.py` 会暂时停止本机反向连接并重启 云端 Host Host，应在空闲时执行。`verify_dsh_mcp.py` 使用独立 Host 与随机工具名验证新 HTTP MCP 的首次发现和调用。
 
 `verify_mcp_discovery.mjs` 与 `verify_dsh_discovery.py` 检查额外服务无响应时的完整发现、独立取消、恢复和同一会话的跨目标操作，使用临时 HTTP MCP 服务与本地固定模型响应。
 

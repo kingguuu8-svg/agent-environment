@@ -198,7 +198,7 @@ window.__ModuleLoader__.load({
       const entry = new URLSearchParams(location.hash.slice(1) || location.search.slice(1));
       const originMachine = entry.get("machine") ?? "cloud";
       const originWorkspace = entry.get("workspace");
-      const label = originMachine === "cloud" ? "VPS4 Web" : `${originMachine} Web`;
+      const label = originMachine === "cloud" ? "云端 Web" : `${originMachine} Web`;
       const originalCall = ctx.connection.rpc.call.bind(ctx.connection.rpc);
       const leases = new Map();
       const referenceTargets = new Map();
@@ -494,7 +494,7 @@ window.__ModuleLoader__.load({
               statusError ? h("div", { role: "alert", className: "rw-error" }, "暂时无法检查接入进度：", statusError, " ", h("button", { type: "button", className: "rw-button", onClick: () => refreshStatus.current() }, "重新检查")) : null,
               h("p", { className: "rw-meta" }, "已经接入过的机器可直接返回工作区选择，重跑安装会沿用原设备。")) : null,
             error ? h("p", { role: "alert", className: "rw-error" }, error) : null),
-          h("div", { className: "rw-footer" }, h("span", { className: "rw-meta" }, "Agent、模型配置和记录继续保存在 VPS4。"),
+          h("div", { className: "rw-footer" }, h("span", { className: "rw-meta" }, "Agent、模型配置和记录继续保存在 云端主机。"),
             h("div", { className: "rw-footer-actions" }, h("button", { type: "button", className: "rw-button", disabled: busy || returning, onClick: () => leave() }, returning ? "正在返回…" : "返回工作区选择"),
               ready ? h("button", { type: "button", className: "rw-button rw-primary", disabled: returning, onClick: () => leave(true), "data-modal-autofocus": true }, "选择此设备的工作区") :
                 h("button", { type: "button", className: "rw-button rw-primary", disabled: busy || returning, onClick: download, "data-modal-autofocus": true }, busy ? "正在生成…" : expired ? "重新生成并下载" : installer ? "再次下载" : "下载安装器"))));
@@ -597,7 +597,7 @@ window.__ModuleLoader__.load({
         if (setupOpen) return h(DeviceSetupDialog, { onClose: (signal) => returnToPicker(null, signal), onConnected: returnToPicker });
         return h(Modal, { open: true, headless: true, title, onClose: cancel, className: "rw-dialog" },
           h("div", { className: "rw-dialog-heading" }, h("h2", null, title), h("button", { type: "button", className: "rw-button", disabled: cancelDisabled, "aria-label": "关闭", "data-modal-autofocus": true, onClick: cancel }, "×")),
-          h("p", { className: "rw-description" }, switching ? "切换工具的执行位置，同一会话继续使用原有历史。" : "选一个工作区开始。Agent 和会话记录保存在 VPS4。"),
+          h("p", { className: "rw-description" }, switching ? "切换工具的执行位置，同一会话继续使用原有历史。" : "选一个工作区开始。Agent 和会话记录保存在 云端主机。"),
           h("div", { className: "rw-dialog-body" },
           connection?.status === "cloud-offline" ? h("div", { className: "rw-connection-warning", role: "status" },
             h("strong", null, connection.loginExpired ? "云端登录已失效" : "页面与云端的连接已中断"),
@@ -866,7 +866,7 @@ window.__ModuleLoader__.load({
         return h("div", { className: "rw-bar", "data-remote-machine": current.machine, "data-remote-workspace": current.workspace },
           h("button", { type: "button", className: "rw-button rw-target", "aria-label": "工作环境：" + shortTarget(current), title: current.workspace + "\n点击查看机器、目录和连接，或切换工作区。", onClick: () => setChoosing(true) },
             h("span", { className: "rw-dot", "data-status": availability }), h("span", { className: "rw-target-label" }, shortTarget(current)), h("span", { className: "rw-target-status" }, statusLabel), h("span", { "aria-hidden": true }, "⌄")),
-          mine ? h("span", { className: "rw-control", title: cloudUnavailable ? "未发送内容保留在当前浏览器。连接恢复后先检查会话，再决定是否发送。" : "会话记录保存在 VPS4，此窗口可以提交输入。" }, cloudUnavailable ? "草稿保留 · 等待重连" : "云端记录 · 可输入") :
+          mine ? h("span", { className: "rw-control", title: cloudUnavailable ? "未发送内容保留在当前浏览器。连接恢复后先检查会话，再决定是否发送。" : "会话记录保存在 云端主机，此窗口可以提交输入。" }, cloudUnavailable ? "草稿保留 · 等待重连" : "云端记录 · 可输入") :
             h("button", { type: "button", className: "rw-button", disabled: cloudUnavailable, onClick: async () => {
               try { setView(await control(sessionId, true)); setError(null); showNotice("已接管输入，可以继续这条会话。"); } catch (failure) { setError(failure); }
             } }, "接管输入"),

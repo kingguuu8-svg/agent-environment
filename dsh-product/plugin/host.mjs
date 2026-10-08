@@ -274,7 +274,7 @@ export class RemoteWorkspaces extends TypertRemoteService {
   async catalog(request) {
     checkRequest(request);
     this.reloadTargets();
-    const machines = [{ id: "cloud", label: "VPS4 · 云端", workspace: this.environment.get("cloud").workspace }, ...Object.entries(this.environment.configuration.targets ?? {}).map(([id, target]) => ({ id, label: target.label ?? id, workspace: target.workspace }))];
+    const machines = this.environment.machines();
     for (const machine of machines) {
       machine.hostname = machine.id === "cloud" ? hostname() : [...this.environment.entries.values()].find((entry) => entry.machine === machine.id && entry.context?.hostname)?.context.hostname;
     }

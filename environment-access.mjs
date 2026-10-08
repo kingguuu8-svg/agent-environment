@@ -76,7 +76,7 @@ function contract(url) {
       "An unavailable target returns an error. Keep the requested target; never silently execute the operation on another machine.",
       "Calls are not automatically retried. A timeout or lost response can follow a completed or partially completed operation. Inspect the target's actual state before repeating any mutation. Other agents can operate on the same files concurrently.",
       "Use a client timeout of at least 200 seconds; server requests are bounded to 180 seconds and native tools retain their own time limits. Cancelling an HTTP request or an MCP tools/call cancels only that invocation.",
-      "Keep the key private. Send it only to the stated HTTPS origin in Authorization; do not include it in URLs, tool arguments, project files or logs. A 401 requires valid credentials. New MCP connections must initialize before listing/calling tools.",
+      "Keep the key private. Send it only to the stated origin in Authorization (HTTPS, or loopback HTTP through your SSH tunnel); do not include it in URLs, tool arguments, project files or logs. A 401 requires valid credentials. New MCP connections must initialize before listing/calling tools.",
     ],
     inputSchema,
     examples: [
@@ -161,10 +161,7 @@ export async function startEnvironmentAccess({ configFile, environment, callTool
     reloadTargets();
     if (input.action === "list") {
       const targets = await interruptible(environment.discover(signal), signal);
-      return { machines: [
-        { id: "cloud", label: "VPS4", workspace: environment.get("cloud").workspace },
-        ...Object.entries(environment.configuration.targets ?? {}).map(([id, item]) => ({ id, label: item.label ?? id, workspace: item.workspace })),
-      ], targets: targets.map((entry) => ({ ...entry, tools: entry.tools.map((tool) => tool.name) })) };
+      return { machines: environment.machines(), targets: targets.map((entry) => ({ ...entry, tools: entry.tools.map((tool) => tool.name) })) };
     }
     if (input.action === "workspace") {
       if (input.machine !== "cloud" && !environment.configuration.targets?.[input.machine]) {

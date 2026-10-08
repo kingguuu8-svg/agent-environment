@@ -1,6 +1,7 @@
 {
   "name": "remote-dsh-workspaces",
   "version": "0.1.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "exports": { ".": "./host.mjs", "./client": "./client.js", "./package.json": "./package.json" },

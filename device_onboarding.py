@@ -370,14 +370,18 @@ def pair(runtime, state, user_home, pairing_id, request):
                 "localPort": request["localPort"],
                 "base": str(runtime),
                 "node": platform.get("node", "node"),
+                "webPort": platform.get("webPort", 3080),
             }
             save(receipt_path, receipt)
         result = receipt["result"]
+        platform = json.loads((runtime / "device-platform.json").read_text())
+        tool_key = Path(platform.get("toolKey", str(runtime / "keys/cloud-to-vps1")))
+        web_port = platform.get("webPort", 3080)
         machine, port = result["machine"], result["cloudPort"]
         target = {
             "host": request["user"] + "@127.0.0.1",
             "port": port,
-            "identity_file": str(runtime / "keys/cloud-to-vps1"),
+            "identity_file": str(tool_key),
             "known_hosts_file": str(runtime / (machine + "-known_hosts")),
             "node": request["node"],
             "npm": request["npm"],
@@ -416,7 +420,7 @@ def pair(runtime, state, user_home, pairing_id, request):
         authorized(
             user_home,
             add=key_line(
-                f'restrict,port-forwarding,permitopen="127.0.0.1:3080",permitlisten="127.0.0.1:{port}",command="{escaped}"',
+                f'restrict,port-forwarding,permitopen="127.0.0.1:{web_port}",permitlisten="127.0.0.1:{port}",command="{escaped}"',
                 request["entryPublicKey"],
                 "remote-dsh-device-" + machine,
             ),
@@ -430,7 +434,7 @@ def pair(runtime, state, user_home, pairing_id, request):
         result = {
             **result,
             "toolPublicKey": " ".join(
-                (runtime / "keys/cloud-to-vps1.pub").read_text().split()[:2]
+                tool_key.with_suffix(".pub").read_text().split()[:2]
             ),
         }
         receipt["complete"] = True

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Device Web entry. Model execution and session storage stay on VPS4. */
+/** Device Web entry. Model execution and session storage stay on 云端主机. */
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
@@ -128,7 +128,7 @@ async function main() {
   }
   function open(url) {
     const connection = values.foreground && !values["connection-only"] ? "关闭此终端会断开 Web 转发。" : profile.localState ? "当前入口直接访问云端 Host。" : "本机连接由用户服务保持。";
-    process.stdout.write(`云端 DSH 已连接：${url}\n会话和 Agent 在 VPS4 运行；${connection}\n`);
+    process.stdout.write(`云端 DSH 已连接：${url}\n会话和 Agent 在 云端主机 运行；${connection}\n`);
     if (!values["no-open"] && (process.env.DISPLAY || process.env.WAYLAND_DISPLAY)) {
       const browser = spawn("xdg-open", [url], { stdio: "ignore", detached: true });
       browser.on("error", () => {}); browser.unref();

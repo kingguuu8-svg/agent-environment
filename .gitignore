@@ -6,3 +6,24 @@ node_modules/
 *.pyc
 targets.json
 vps-check.json
+
+# Generated platform configuration and capabilities
+.env
+.env.*
+!.env.example
+platform.json
+dsh-targets.json
+dsh-models.json
+device-platform.json
+device-installer.bundle.json
+dsh-home/
+dsh-state/
+keys/
+dist/
+*.tar.gz
+connection.md
+environment-access.json
+model.env
+web-url.json
+web-launch.txt
+.credentials.yaml

@@ -5,6 +5,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { createHash } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { hostname } from "node:os";
 import { openWorkspace, toolNames } from "./remote-agent.mjs";
 import { readJson, writeJson } from "./state-json.mjs";
 export { readJson, writeJson } from "./state-json.mjs";
@@ -40,6 +41,12 @@ export class Environment {
     const entry = this.entries.get(id);
     if (!entry) throw new Error(`Unknown workspace or service: ${id}`);
     return entry;
+  }
+  machines() {
+    return [
+      { id: "cloud", label: this.configuration.cloudLabel ?? hostname(), workspace: this.get("cloud").workspace },
+      ...Object.entries(this.configuration.targets ?? {}).map(([id, entry]) => ({ id, label: entry.label ?? id, workspace: entry.workspace })),
+    ];
   }
   list() {
     return [...this.entries].map(([id, entry]) => ({

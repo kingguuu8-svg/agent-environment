@@ -22,8 +22,8 @@ FILES = [
 ]
 
 
-def bundle(root):
-    cache = root / ".local/device-installer-assets"
+def bundle(root, asset_dir=None):
+    cache = asset_dir if asset_dir is not None else root / ".local/device-installer-assets"
     cache.mkdir(parents=True, exist_ok=True)
     archives = {}
     for target_os, native_os in [
@@ -77,7 +77,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output", type=Path, default=Path(".local/device-installer.bundle.json")
     )
+    parser.add_argument("--asset-dir", type=Path)
     args = parser.parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(bundle(Path(__file__).resolve().parent)))
+    args.output.write_text(json.dumps(bundle(Path(__file__).resolve().parent, args.asset_dir)))
     print(f"Built device package: {args.output.stat().st_size} bytes")

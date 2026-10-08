@@ -415,6 +415,20 @@ def run():
             "a fresh pairing package recovers an already registered device after a lost response and expiry"
         )
 
+        configured = json.loads((runtime / "device-platform.json").read_text())
+        custom_tool = public(runtime / "keys", "host-to-devices")
+        configured.update({"toolKey": str(runtime / "keys/host-to-devices"), "webPort": 33080})
+        save(runtime / "device-platform.json", configured)
+        custom_token, _ = issue()
+        custom_request = {**request, "entryPublicKey": public(base, "custom-entry")}
+        custom = pair(runtime, state, user_home, custom_token, custom_request)
+        custom_target = json.loads((runtime / "dsh-targets.json").read_text())["targets"][custom["machine"]]
+        assert custom["toolPublicKey"] == custom_tool and custom["webPort"] == 33080
+        assert custom_target["identity_file"] == str(runtime / "keys/host-to-devices")
+        permissions = next(line for line in (user_home / ".ssh/authorized_keys").read_text().splitlines() if line.endswith("remote-dsh-device-" + custom["machine"]))
+        assert 'permitopen="127.0.0.1:33080"' in permissions
+        passed("portable Host tool key and Web port are used by pairing and exact SSH forwarding permissions")
+
         bridge_token, _ = issue()
         bridge_request = {
             **request,
