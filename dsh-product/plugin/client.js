@@ -283,10 +283,12 @@ window.__ModuleLoader__.load({
         const [setupOpen, setSetupOpen] = useState(false);
         const lifetime = useRef();
         const catalogRequest = useRef();
+        const choiceRequest = useRef();
         const generation = useRef(0);
         const committing = useRef(false);
         const lastPaths = useRef(new Map());
         const busy = saving || ownerBusy;
+        const cancelDisabled = ownerBusy || (saving && !switching);
         const machines = catalog?.machines ?? [];
         const chosenMachine = machines.find((item) => item.id === machine);
         const scan = async (selectedMachine, directory) => {
@@ -323,7 +325,7 @@ window.__ModuleLoader__.load({
         };
         useEffect(() => {
           loadCatalog();
-          return () => { catalogRequest.current?.abort(); lifetime.current?.abort(); generation.current++; };
+          return () => { catalogRequest.current?.abort(); lifetime.current?.abort(); choiceRequest.current?.abort(); generation.current++; };
         }, []);
         useEffect(() => {
           if (connection && connection.status !== "cloud-offline" && !catalog && !loading && error) { loadCatalog(); return; }
@@ -337,10 +339,16 @@ window.__ModuleLoader__.load({
           if (!listing || busy || loading || changedPath || !canCommit || sameWorkspace || committing.current) return;
           committing.current = true;
           setSaving(true); setError("");
-          try { await (takingOver ? onHandoff : onChoose)({ machine, workspace: listing.absolutePath }); }
-          catch (failure) { committing.current = false; setError(failure.message); setSaving(false); }
+          const abort = switching ? new AbortController() : undefined;
+          choiceRequest.current = abort;
+          try { await (takingOver ? onHandoff : onChoose)({ machine, workspace: listing.absolutePath }, abort?.signal); }
+          catch (failure) { if (!abort?.signal.aborted) { committing.current = false; setError(failure.message); setSaving(false); } }
         };
-        const cancel = () => { if (!busy) onCancel(); };
+        const cancel = () => {
+          if (cancelDisabled) return;
+          choiceRequest.current?.abort();
+          onCancel();
+        };
         const parent = (listing?.absolutePath.replaceAll("\\", "/").replace(/\/+$/, "").replace(/\/[^/]*$/, "") || "/").replace(/^([A-Za-z]:)$/, "$1/");
         const saved = new Map((catalog?.savedWorkspaces ?? []).filter((item) => item.machine === machine).map((item) => [item.workspace, item]));
         if (initial?.machine === machine && !saved.has(initial.workspace)) saved.set(initial.workspace, initial);
@@ -358,7 +366,7 @@ window.__ModuleLoader__.load({
         };
         if (setupOpen) return h(DeviceSetupDialog, { onClose: (signal) => returnToPicker(null, signal), onConnected: returnToPicker });
         return h(Modal, { open: true, headless: true, title, onClose: cancel, className: "rw-dialog" },
-          h("div", { className: "rw-dialog-heading" }, h("h2", null, title), h("button", { type: "button", className: "rw-button", disabled: busy, "aria-label": "关闭", "data-modal-autofocus": true, onClick: cancel }, "×")),
+          h("div", { className: "rw-dialog-heading" }, h("h2", null, title), h("button", { type: "button", className: "rw-button", disabled: cancelDisabled, "aria-label": "关闭", "data-modal-autofocus": true, onClick: cancel }, "×")),
           h("p", { className: "rw-description" }, switching ? "切换工具的执行位置，同一会话继续使用原有历史。" : "选一个工作区开始。Agent 和会话记录保存在 VPS4。"),
           h("div", { className: "rw-dialog-body" },
           connection?.status === "cloud-offline" ? h("div", { className: "rw-connection-warning", role: "status" },
@@ -412,11 +420,12 @@ window.__ModuleLoader__.load({
               h("button", { className: "rw-button", type: "button", "aria-label": "复制工作区路径", onClick: () => copyPath(listing.absolutePath) }, icon("copy"), "复制路径")),
             h("code", { className: "rw-full-path" }, listing.absolutePath)) : null,
           changedPath ? h("p", { className: "rw-meta", role: "status" }, "目录已修改，按 Enter 或“前往”载入后再选择。") : null,
+          saving && switching ? h("p", { className: "rw-meta", role: "status" }, "正在连接并检查目标工作区，可随时取消等待。") : null,
           h("div", { className: "rw-footer" },
             h("div", null, h("span", { className: "rw-meta" }, takingOver ? "确认后，此窗口接管输入；原窗口继续查看。执行中的任务保留原工作区。" : !canChoose ? "查看模式：接管输入后可切换工作区。" : switching ? "模型提示词和文件侧栏随工作区更新。" : listing?.truncated ? "目录较多，可输入完整路径前往。" : "记录在云端，文件留在所选机器。"),
               h("button", { type: "button", className: "rw-button", style: { marginTop: "8px", display: "flex" }, disabled: busy, onClick: () => setSetupOpen(true) }, "接入新设备")),
             h("div", { className: "rw-footer-actions" },
-              h("button", { type: "button", className: "rw-button", disabled: busy, onClick: cancel }, "取消"),
+              h("button", { type: "button", className: "rw-button", disabled: cancelDisabled, onClick: cancel }, saving && switching ? "取消准备" : "取消"),
               h("button", { type: "button", className: "rw-button rw-primary", disabled: busy || loading || !listing || changedPath || !canCommit || sameWorkspace, onClick: commit }, busy ? takingOver ? "正在接管并准备工作区…" : "正在准备工作区…" : sameWorkspace ? "当前工作区" : takingOver ? "接管并切换" : actionLabel)))
         );
       }
@@ -550,12 +559,33 @@ window.__ModuleLoader__.load({
         const cloudUnavailable = error instanceof CloudConnectionError;
         const availability = cloudUnavailable ? "cloud-offline" : probing === current.id ? "checking" : connection?.status ?? "unknown";
         const statusLabel = { online: "已连接", unavailable: "工作区不可用", checking: "检查中", unknown: "待检查", "cloud-offline": error?.loginExpired ? "登录已失效" : "云端断线" }[availability];
-        const selectWorkspace = async (chosen, takeover = false) => {
+        const selectWorkspace = async (chosen, takeover = false, signal) => {
           const request = { sessionId, revision: effective.revision, ...chosen };
-          const value = takeover ? await api("switch", { ...request, takeover: true, clientId, label }) : await controlled("switch", request);
-          setView(value); setChoosing(false);
-          if (value.pending) showNotice((takeover ? "已接管输入。" : "") + "已安排切换。当前任务继续在原工作区执行，结束后切换至 " + shortTarget(value.pending) + "。");
-          else if (takeover) showNotice("已接管输入并切换至 " + shortTarget(value.current) + "，可以继续同一条会话。");
+          try {
+            const value = takeover ? await api("switch", { ...request, takeover: true, clientId, label }, signal) : await controlled("switch", request, signal);
+            signal?.throwIfAborted();
+            setView(value);
+            if (activeSession.current !== sessionId) return;
+            setChoosing(false);
+            if (value.pending) showNotice((takeover ? "已接管输入。" : "") + "已安排切换。当前任务继续在原工作区执行，结束后切换至 " + shortTarget(value.pending) + "。");
+            else if (takeover) showNotice("已接管输入并切换至 " + shortTarget(value.current) + "，可以继续同一条会话。");
+          } catch (failure) {
+            if (!signal?.aborted) throw failure;
+            // The carrier cancels preparation on HTTP close. A completed commit
+            // can still lose its reply, so reconcile rather than roll it back.
+            try {
+              const value = await api("get", { sessionId, clientId }, AbortSignal.timeout(5000));
+              setView(value);
+              if (activeSession.current !== sessionId) return;
+              setError(null);
+              showNotice(value.revision === request.revision ? "已取消工作区准备，继续使用 " + shortTarget(value.current) + "。" :
+                "已停止等待。云端当前工作区：" + shortTarget(value.current) + (value.pending ? "；任务结束后切换至 " + shortTarget(value.pending) : "") + "。");
+            } catch (confirmationError) {
+              if (activeSession.current !== sessionId) return;
+              setError(confirmationError.name === "TimeoutError" ? new CloudConnectionError(confirmationError) : confirmationError);
+              showNotice("已停止等待，云端结果暂未确认。恢复连接后请检查工作环境。", "error");
+            }
+          }
         };
         return h("div", { className: "rw-bar", "data-remote-machine": current.machine, "data-remote-workspace": current.workspace },
           h("button", { type: "button", className: "rw-button rw-target", "aria-label": "工作环境：" + shortTarget(current), title: current.workspace + "\n点击查看机器、目录和连接，或切换工作区。", onClick: () => setChoosing(true) },
@@ -571,8 +601,8 @@ window.__ModuleLoader__.load({
           ["unavailable", "cloud-offline"].includes(availability) && !error?.loginExpired ? h("button", { className: "rw-button", type: "button", onClick: () => { refreshNow.current(); probeNow.current(); } }, cloudUnavailable ? "重连云端" : "重新检查工作区") : null,
           error ? h("span", { role: "alert", className: "rw-error", title: error.cause?.message ?? error.message }, cloudUnavailable && !error.loginExpired ? "正在自动重连，未发送内容保留在当前浏览器。" : error.message) : null,
           choosing ? h(DirectoryDialog, { title: "工作环境", initial: current, switching: true, canChoose: !!mine,
-            onHandoff: !cloudUnavailable && state?.control ? (chosen) => selectWorkspace(chosen, true) : undefined,
-            actionLabel: "切换到此工作区", connection: { ...connection, status: availability, ...(error ? { error: error.message, loginExpired: !!error.loginExpired } : {}) }, onProbe: () => probeNow.current(), onCancel: () => setChoosing(false), onChoose: selectWorkspace }) : null);
+            onHandoff: !cloudUnavailable && state?.control ? (chosen, signal) => selectWorkspace(chosen, true, signal) : undefined,
+            actionLabel: "切换到此工作区", connection: { ...connection, status: availability, ...(error ? { error: error.message, loginExpired: !!error.loginExpired } : {}) }, onProbe: () => probeNow.current(), onCancel: () => setChoosing(false), onChoose: (chosen, signal) => selectWorkspace(chosen, false, signal) }) : null);
       }
 
       ctx.slots.inject("shell.overlay", () => ctx.slots.register({ name: "shell.overlay", id: "remote-new-session" }, NewSessionFlow));

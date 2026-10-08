@@ -653,6 +653,86 @@ def run(args):
                     finally:
                         os.close(descriptor)
 
+                cookies = next(
+                    handler.cookiejar
+                    for handler in api.browser.handlers
+                    if hasattr(handler, "cookiejar")
+                )
+                cookie = "; ".join(f"{entry.name}={entry.value}" for entry in cookies)
+                for takeover in (True, False):
+                    before_cancel = get()
+                    model_count = len(requests)
+                    request = {
+                        "sessionId": session,
+                        "revision": before_cancel["revision"],
+                        "machine": "slow",
+                        "workspace": str(remote),
+                        "clientId": str(uuid.uuid4()) if takeover else client,
+                        "takeover": takeover,
+                        "epoch": before_cancel["control"]["epoch"],
+                    }
+                    assert queued_worker_input() == 0
+                    caller = None
+                    try:
+                        os.kill(paused_worker, signal.SIGSTOP)
+                        caller = subprocess.Popen(
+                            [args.node, str(ROOT / "verify_dsh_handoff_rpc.mjs")],
+                            stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                        )
+                        caller.stdin.write(
+                            json.dumps(
+                                {
+                                    "origin": api.origin,
+                                    "cookie": cookie,
+                                    "request": request,
+                                }
+                            )
+                            + "\n"
+                        )
+                        caller.stdin.flush()
+                        wait_for(queued_worker_input, timeout=10)
+                        caller.stdin.write("cancel\n")
+                        caller.stdin.flush()
+                        caller.wait(timeout=5)
+                        assert caller.returncode == 0, caller.stderr.read()
+                        assert "PASS native fetch cancellation" in caller.stdout.read()
+                        during_cancel = get()
+                        assert during_cancel["current"] == before_cancel["current"]
+                        assert during_cancel["revision"] == before_cancel["revision"]
+                        assert during_cancel["control"] == before_cancel["control"]
+                    finally:
+                        if paused_worker in workers():
+                            os.kill(paused_worker, signal.SIGCONT)
+                        if caller:
+                            if caller.poll() is None:
+                                caller.kill()
+                                caller.wait()
+                            for stream in (caller.stdin, caller.stdout, caller.stderr):
+                                try:
+                                    stream.close()
+                                except BrokenPipeError:
+                                    pass
+                    # A real round trip drains the resumed worker after its
+                    # cancelled preflight, proving no delayed handoff commits.
+                    api.remote("pick", {"machine": "slow", "workspace": str(remote)})
+                    after_cancel = get()
+                    assert after_cancel["current"] == before_cancel["current"]
+                    assert after_cancel["revision"] == before_cancel["revision"]
+                    assert after_cancel["control"] == before_cancel["control"]
+                    assert after_cancel["pending"] is None
+                    assert len(requests) == model_count
+                    assert api.read(session, "AGENTS.md")["text"].startswith(
+                        refreshed_marker
+                    )
+                    passed(
+                        "cancelling a real native HTTP "
+                        + ("handoff" if takeover else "workspace switch")
+                        + " preserves input ownership and the binding after the paused SSH worker resumes, without breaking shared tools"
+                    )
+
                 before_race = get()
                 contender, newer_window = str(uuid.uuid4()), str(uuid.uuid4())
                 assert queued_worker_input() == 0
