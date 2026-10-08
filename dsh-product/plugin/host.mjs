@@ -133,9 +133,7 @@ export class RemoteWorkspaces extends TypertRemoteService {
       inputSchema: { type: "object", properties: { action: { enum: ["list", "call"] }, target: { type: "string" }, tool: { type: "string" }, args: { type: "object" } }, required: ["action"], additionalProperties: false },
       call: async (args, execution) => {
         if (args.action === "call") return this.callTool(args.target, args.tool, args.args ?? {}, execution.signal);
-        await Promise.allSettled(this.environment.list().filter((target) => target.kind === "mcp").map((target) => this.environment.connect(target.id)));
-        execution.signal?.throwIfAborted();
-        const data = this.environment.list().map((target) => ({ ...target, tools: this.environment.descriptors(target.id) }));
+        const data = await this.environment.discover(execution.signal);
         return { content: [{ type: "text", text: JSON.stringify(data) }] };
       },
     }));

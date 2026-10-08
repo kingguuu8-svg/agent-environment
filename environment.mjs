@@ -50,6 +50,24 @@ export class Environment {
     }));
   }
 
+  async discover(signal) {
+    signal?.throwIfAborted();
+    const discovery = Promise.allSettled(this.list().filter((target) => target.kind === "mcp").map((target) => this.connect(target.id)));
+    let onAbort;
+    try {
+      // Only the caller stops waiting. Other sessions share these connections.
+      await (signal ? Promise.race([discovery, new Promise((_, reject) => {
+        onAbort = () => reject(signal.reason);
+        signal.addEventListener("abort", onAbort, { once: true });
+        if (signal.aborted) onAbort();
+      })]) : discovery);
+      signal?.throwIfAborted();
+      return this.list().map((target) => ({ ...target, tools: this.descriptors(target.id) }));
+    } finally {
+      if (onAbort) signal.removeEventListener("abort", onAbort);
+    }
+  }
+
   async register(machine, workspace) {
     if (machine === "cloud") {
       const canonical = realpathSync(workspace);
@@ -96,16 +114,28 @@ export class Environment {
         const client = new Client({ name: "cloud-pi-environment", version: "0.1.0" });
         connection = { client, close: () => client.close() };
         const endpoint = this.configuration.mcp[id];
-        await client.connect(new StreamableHTTPClientTransport(new URL(entry.url), {
-          requestInit: endpoint.headers ? { headers: endpoint.headers } : undefined,
-        }));
-        connection.descriptors = [];
-        let cursor;
-        do {
-          const page = await client.listTools(cursor ? { cursor } : {});
-          connection.descriptors.push(...page.tools);
-          cursor = page.nextCursor;
-        } while (cursor);
+        const deadline = new AbortController();
+        const timer = setTimeout(() => {
+          deadline.abort(new Error(`MCP service ${id}: initialization and tool discovery timed out after 12 seconds. Retry discovery when the service is available.`));
+          // The SDK's initialized notification has no request AbortSignal.
+          // Close only this initializing client to also interrupt that HTTP send.
+          void client.close().catch(() => {});
+        }, 12000);
+        try {
+          await client.connect(new StreamableHTTPClientTransport(new URL(entry.url), {
+            requestInit: endpoint.headers ? { headers: endpoint.headers } : undefined,
+          }), { signal: deadline.signal });
+          connection.descriptors = [];
+          let cursor;
+          do {
+            const page = await client.listTools(cursor ? { cursor } : {}, { signal: deadline.signal });
+            connection.descriptors.push(...page.tools);
+            cursor = page.nextCursor;
+          } while (cursor);
+          deadline.signal.throwIfAborted();
+        } catch (error) {
+          throw deadline.signal.aborted ? deadline.signal.reason : error;
+        } finally { clearTimeout(timer); }
         if (JSON.stringify(entry.descriptors) !== JSON.stringify(connection.descriptors)) this.version++;
         entry.descriptors = connection.descriptors;
       } else {

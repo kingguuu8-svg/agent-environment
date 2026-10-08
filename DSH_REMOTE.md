@@ -78,6 +78,8 @@ dsh web --remote --foreground --no-open
 
 Agent 还有一个 `environment` 工具，可以列出已经登记的工作区与 MCP 服务，或明确调用其中一个目标的工具。例如可以让它在本机项目工作时，同时检查云端服务。显式跨目标调用保持会话的默认工作区。
 
+额外 MCP 服务的首次连接与完整工具枚举最多等待约 12 秒。部分服务离线时，环境列表仍返回正常服务的工具，并标明失败服务的原因；恢复后再次发现即可使用原服务。点击“停止生成”可以结束当前发现等待，其他会话共享的连接继续保持。已经连接成功的服务沿用工具各自的执行时限。
+
 额外 HTTP MCP 服务可写入 VPS4 的 `dsh-targets.json` 中的 `mcp` 字段，重启 Host 后生效；格式与已有 `environment.mjs` 一致。新机器登记后，目录选择器重新读取配置，无需重启 Host。
 
 ## 接入新设备
@@ -168,6 +170,8 @@ Web 基于 DSH `0.2.0-rc.2`，通过插件复用其会话、聊天、分支、�
 搜索源码和 MIT 许可由 `node dsh-product/sync-file-search.mjs` 同步到现有 `workspace-files.mjs`，使用 `--check` 核对生成内容。目标设备沿用现有工具包安装流程。升级 DSH 时需重新核对上游搜索和客户端引用接口，并运行 `verify_workspace_references.mjs` 与 `verify_dsh_references.py`。
 
 可重复验证见 [验证记录](VALIDATION.md)。`verify_dsh.py` 检查真实模型、排队切换、重复请求、输入权和文件作用域；`verify_dsh_recovery.py` 会暂时停止本机反向连接并重启 VPS4 Host，应在空闲时执行。`verify_dsh_mcp.py` 使用独立 Host 与随机工具名验证新 HTTP MCP 的首次发现和调用。
+
+`verify_mcp_discovery.mjs` 与 `verify_dsh_discovery.py` 检查额外服务无响应时的完整发现、独立取消、恢复和同一会话的跨目标操作，使用临时 HTTP MCP 服务与本地固定模型响应。
 
 `verify_dsh_context.py` 在独立 Host 与 SSH 环境中抓取实际模型 HTTP 请求，检查切换前后目标、项目指令、历史保留及工作区命名，也检查查看窗口接力、无效选择、执行中接力和慢准备期间的控制权变化。Host 启动时修正旧的自动生成名称；用户手动命名继续保留。
 

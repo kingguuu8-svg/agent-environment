@@ -9,6 +9,7 @@
 | 会话、排队切换、输入权、文件作用域 | `verify_dsh.py`，Agent 在 VPS4，目标 VPS1，真实模型 | 16 项通过 |
 | 取消、目标离线、进程丢失、Host 重启 | `verify_dsh_recovery.py`，VPS4 与当前电脑，真实模型与实际服务停启 | 7 项通过 |
 | 新 HTTP MCP 的发现与调用 | `verify_dsh_mcp.py`，独立 DSH Host、真实模型、临时 HTTP MCP 服务 | 2 项通过 |
+| 部分 MCP 服务离线与发现恢复 | `verify_mcp_discovery.mjs`，官方 SDK HTTP 服务与共享环境；`verify_dsh_discovery.py`，独立 Host、loopback SSH 与本地 SSE 模型 | 14 项与 5 项通过 |
 | 模型请求、环境选择、接力与连接状态 | `verify_dsh_context.py`，独立 Host、loopback SSH、实际 HTTP 录制端点 | 24 项通过 |
 | 输入权持久恢复与分支独立 | `verify_dsh_ownership.py`，独立原生 Host、本地 SSE 模型、两次停启 | 7 项通过 |
 | 客户端发送失败与返回结果 | `verify_dsh_client.mjs`，实际客户端拦截器、loopback HTTP 服务 | 4 项通过 |
@@ -56,6 +57,8 @@ dsh web --remote --no-open
 .venv/bin/python verify_dsh.py --url-file /home/kingguuu8/.cache/remote-dsh/a36ca3ce857334ca.json --origin http://127.0.0.1:3081
 .venv/bin/python verify_dsh_recovery.py --config .local/vps-check.json --url-file /home/kingguuu8/.cache/remote-dsh/a36ca3ce857334ca.json --workspace .local/dsh-user-demo
 .venv/bin/python verify_dsh_mcp.py --models .local/dsh-dev/models.json --model-env .local/dsh-dev/model.env
+node verify_mcp_discovery.mjs
+.venv/bin/python verify_dsh_discovery.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
 .venv/bin/python verify_dsh_context.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
 .venv/bin/python verify_dsh_ownership.py --node /home/kingguuu8/.local/node/bin/node
 /home/kingguuu8/.local/node/bin/node verify_dsh_client.mjs
@@ -274,6 +277,24 @@ Host 现在将绑定会话的原生补全请求发送到当前目标 worker，�
 新版部署到 VPS4，只更新 Host 文件并保留原件和权限备份。35 个会话日志与五项投影、26 个控制窗口、七个工作区分组、机器清单和六份配置保持，三个实际目标的文件与引用检查通过。生产验证保持只读。
 
 本轮限制的是工作区信息准备，原设备上的实际工具仍按其真实连接情况执行。已知不可用期间，模型使用明确标记的上次项目信息；主动检查或页面复查成功后恢复实时读取。macOS 与 Windows 原生安装仍待真机验证。
+
+## 部分 MCP 服务离线
+
+2026 年 10 月 8 日，隔离环境中同时登记一个正常服务与一个收到初始化请求后无响应的服务。正常服务的两个工具已完成枚举，整个发现请求在 14.58 秒后仍在等待；原生云端文件读取成功。原实现等待所有服务完成连接和枚举，调用方取消也要等这一步结束。
+
+共享环境现在将每个额外 MCP 服务的初始化与全部工具分页限制为 12 秒。超时关闭本次初始化的 Client，并返回该服务不可用的原因；完整发现后清除时限，后续真实工具调用沿用原执行时限。取消只结束当前调用方的等待，其他会话共享同一初始化过程。工具契约在全部分页成功后发布，失败保留之前完整的缓存；恢复后沿用原服务身份重新发现。
+
+`verify_mcp_discovery.mjs` 的 14 项官方 SDK HTTP 检查通过，覆盖正常分页与结构化结果，初始化、初始化通知、首次枚举和后续分页无响应，访问拒绝，提前取消与并发取消，旧工具缓存、恢复和清理。首次发现用时 12.01 秒，调用方取消约 0.09 毫秒；正常服务的 13 秒真实调用成功，失败重试用时 12.00 秒。其他服务与原生 Pi 云端读取在等待期间可用。
+
+`verify_dsh_discovery.py` 的五项实际 Host 检查通过。两个会话同时发现环境，取消其中一个用时 0.011 秒，另一 SSH 会话在 12.10 秒完成正常服务调用与原设备文件读取。实际模型 HTTP 请求包含两个完整工具、失败服务原因及原 SSH 项目指令；默认目标、绑定版本、输入权和文件保持。服务恢复后，同一对话调用重新发现的工具并保留历史；Host 重启后原生会话的五项投影、服务身份与默认设备保持，后续任务继续执行。模型端使用 13 条本地固定响应，未调用付费模型。
+
+六项隔离 Web 与集成检查通过：新入口查看已有 SSH 历史、明确接管、立即停止发现、离线服务的失败结果与正常服务完成、同一会话重新调用恢复的服务，以及重启后查看同一历史和目标。恢复任务在页面显示用时一秒；原控制者被隔离窗口的新控制者取代。浏览器无脚本错误，使用 17 条本地固定模型响应。重新认证的入口保持查看模式，输入权恢复另由原生 Host 检查和七项所有权回归验证。
+
+上下文与接力 24 项、输入权七项、Pi 云端会话 14 项回归通过。初版验证中的文件预览断言误把尾换行当作原生接口输出，重启比较误用了包含运行状态的完整列表；已改为按接口实际文本行和五项持久投影比较，并重新运行通过。JavaScript 语法、Python lint、格式、文档禁词与 Git diff 检查通过。证据位于 `.local/verification-dsh-discovery-before.json`、`.local/verification-mcp-discovery.json`、`.local/verification-dsh-discovery.json`、`.local/verification-dsh-discovery-web.json` 与 `.local/verification-dsh-mcp-discovery-deployed.json`。
+
+新版只替换 VPS4 的共享环境与 Host 两份源码，原件与权限保留备份。35 个会话日志与五项投影、26 个控制窗口、七个工作区分组、六份配置和机器清单保持；三台机器的原生文件与引用检查通过。生产页面恢复原设备、查看模式与连接，浏览器无脚本错误，验证没有生产模型请求。临时进程、目录与页面已清理。
+
+首次环境发现会等待当前服务的连接结果，最长约 12 秒；成功连接后的服务继续使用现有工具契约，重试失败服务时仍可能等待同一时限。macOS 与 Windows 原生安装仍待真机验证。
 
 ## 设备安装
 
