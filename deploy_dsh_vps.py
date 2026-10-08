@@ -17,6 +17,7 @@ FILES = [
     "bootstrap.py",
     "workspace_gateway.py",
     "environment.mjs",
+    "environment-access.mjs",
     "state-json.mjs",
     "device_onboarding.py",
     "installer_templates.py",

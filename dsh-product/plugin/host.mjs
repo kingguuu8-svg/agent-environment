@@ -15,6 +15,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import lockfile from "proper-lockfile";
 import mime from "mime-types";
 import { Environment, readJson, writeJson } from "../../environment.mjs";
+import { startEnvironmentAccess } from "../../environment-access.mjs";
 import { maxBytes as workspaceFileByteLimit } from "../../workspace-files.mjs";
 import { createPiToolDefinition } from "../pi-tool-result.mjs";
 
@@ -144,6 +145,17 @@ export class RemoteWorkspaces extends TypertRemoteService {
     this.installReplyImages();
     this.installReferenceRouting();
     this.installInputGuard();
+    if (process.env.REMOTE_ENVIRONMENT_ACCESS_CONFIG) {
+      ctx.effect(async () => {
+        const access = await startEnvironmentAccess({
+          configFile: process.env.REMOTE_ENVIRONMENT_ACCESS_CONFIG,
+          environment: this.environment,
+          callTool: (id, tool, args, signal) => this.callTool(id, tool, args, signal),
+          reloadTargets: () => this.reloadTargets(),
+        });
+        return () => access.close();
+      }, "remote: external environment access");
+    }
   }
 
   binding(id) {

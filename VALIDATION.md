@@ -577,6 +577,25 @@ vps1__bash
 
 恢复编号保存在窗口存储，关窗后的浏览器恢复与 macOS、Windows 真机行为仍待验证。
 
+## 外部 Agent 接入
+
+2026 年 10 月 8 日，共享环境增加独立 HTTPS 与 MCP 入口。接入文件保存网址、账户和密钥，原生 Host 继续持有唯一的工作区登记与工具连接。验证对应本轮 `environment-access.mjs` 与 Host 插件源码，凭据保存在 Git 忽略目录，文件权限为 600。
+
+```bash
+.venv/bin/python verify_environment_access.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/pnpm/package-manager-store/v11/links/@/npm/11.20.0/61c2e921ea78f7591fa88d88213cbf6ad002cb23f6191f8d2971c6e08712a583/node_modules/npm/bin/npm-cli.js
+.venv/bin/python verify_dsh_ownership.py --node /home/kingguuu8/.local/node/bin/node
+.venv/bin/python deploy_environment_access.py
+.venv/bin/python verify_environment_access_public.py
+```
+
+隔离原生 Host、真实 loopback SSH 与 Pi 工具的 17 项检查通过。普通 HTTP 和官方 MCP 客户端覆盖公开协议、认证拒绝、Origin、输入结构、请求大小、已有目录登记、实时项目指令、七个原生工具、编辑差异、图片、明确目标路由、部分执行、工具超时、独立取消、重复 MCP 请求、额外服务的分页发现与结构化结果，以及凭据撤销。目录移走时，`context` 拒绝准备该工作区；恢复后继续使用原编号。Host 实际重启后，外部登记、原会话、草稿和输入权恢复。输入权七项回归也通过。
+
+VPS4 新增独立 Caddy 站点并取得受信任的 HTTPS 证书。本机通过公网接口确认 11 个资源，分别读取云端、VPS1 和当前电脑的上下文并调用真实 `bash pwd`；请求结果属于对应目录，非法密钥被拒绝。VPS1 仅用 Python 标准库读取入口、发现资源并操作自己的已登记目录，过程中下载包和新增客户端的数量均为零。公网官方 MCP 客户端完成初始化、读取服务器说明、发现 `environment`、取得上下文与调用工具，原生结构化数据完整。
+
+部署保留源码、状态与 Caddy 原件备份。35 份原会话日志、26 份输入权记录、七个工作区分组、六份原配置、机器清单、11 个资源身份和云草稿保持；第二次只读审计一致，运行源码 SHA256 与本地源码一致。生产检查始终保持原会话与执行绑定，没有提交模型请求、接管或切换。
+
+证据位于 `.local/verification-environment-access.json`、`.local/environment-access-deployment.json`、`.local/verification-environment-access-public.json`。本轮验证协议与实际工具执行，接入说明的读取与执行由各客户端自己的 Agent 完成，尚未逐一验证不同客户端的模型行为。180 秒整体请求上限未在生产注入故障；工具超时与取消在隔离环境验证。
+
 ## 范围与清理
 
 前述 Pi 终端验证覆盖单用户 Linux、云端直接 SSH 登录目标、Pi 原生工具、工作区上下文、常驻 SDK 会话与额外 HTTP MCP。终端复用 Pi 的主要界面组件，完整 Pi 命令集、文件补全、图片粘贴、远端 skills 与扩展及持久 PTY 仍在后续范围。新设备的反向接入由 DSH 工具桥接连接提供。新提示等待当前任务结束后提交；运行期间可接管、取消和安排工作区切换。实际 NAS 尚未连接。
