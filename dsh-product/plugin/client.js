@@ -5,7 +5,113 @@ window.__ModuleLoader__.load({
     const { Modal, MarkdownDelegateProvider, useMarkdownDelegate } = require("@deepseek-ai/dsh-client-ui-primitives");
     const h = React.createElement;
     const { useState, useEffect, useRef, useMemo, useSyncExternalStore } = React;
-    const inject = ["connection", "sessions", "workspaces", "slots", "uiWorkspace", "layout", "sidebarRight", "inputTriggers"];
+    const inject = ["connection", "sessions", "workspaces", "slots", "uiWorkspace", "layout", "sidebarRight", "inputTriggers", "conversation"];
+
+    function createCloudDraftSync({ clientId, getInput, save, notify }) {
+      const states = new Map();
+      let disposed = false;
+      const stateOf = (id) => {
+        if (!states.has(id)) states.set(id, { phase: "local", view: null, input: null, touched: false, dirty: false, seq: 0, paused: 0, references: 0, text: "", attachmentCount: 0 });
+        return states.get(id);
+      };
+      const publish = (state, phase) => { state.phase = phase; if (!disposed) notify(); };
+      const blockedKey = (id) => `remote-dsh-uncertain-draft.${id}`;
+      const rememberBlocked = (id, blocked) => { try { if (!blocked) sessionStorage.removeItem(blockedKey(id)); else sessionStorage.setItem(blockedKey(id), "1"); } catch {} };
+      const schedule = (id) => {
+        const state = stateOf(id); clearTimeout(state.timer);
+        if (!disposed && state.dirty && !state.paused && !state.blocked && state.view?.control?.mine) state.timer = setTimeout(() => flush(id), 450);
+      };
+      const changed = (id) => {
+        const state = stateOf(id), value = state.input.state.getSnapshot();
+        const count = value.attachmentIds.length;
+        if (state.text === value.draft && state.attachmentCount === count) return;
+        state.text = value.draft; state.attachmentCount = count;
+        if (state.seed === value.draft && count === 0) { state.seed = undefined; publish(state, "saved"); return; }
+        state.touched = true; state.seq++;
+        if (state.blocked) { state.dirty = false; publish(state, "local"); return; }
+        state.dirty = !!state.view?.control?.mine;
+        publish(state, "local"); schedule(id);
+      };
+      const receive = (id, view) => {
+        const state = stateOf(id);
+        if (disposed) return;
+        if (state.view?.draft?.revision > view.draft?.revision) view = { ...view, draft: state.view.draft };
+        state.view = view;
+        if (!view.control?.mine) { state.dirty = false; clearTimeout(state.timer); }
+        const draft = view.draft;
+        if (view.control?.mine && draft?.revision === 0 && state.input && (state.text || state.attachmentCount) && !state.blocked && !state.dirty) state.dirty = true;
+        // Only an untouched editor follows the cloud. Local notes remain local
+        // until the user edits them; attachment bytes belong to their window.
+        if (draft && state.input && !state.touched && !state.paused && draft.attachmentCount === 0 && state.text !== draft.text) {
+          state.seed = draft.text;
+          state.input.setDraft(draft.text);
+        }
+        if (!state.dirty && draft && state.text === draft.text && state.attachmentCount === draft.attachmentCount) publish(state, "saved");
+        else if (!state.dirty && !state.saving) publish(state, "local");
+        else notify();
+        schedule(id);
+      };
+      async function flush(id) {
+        const state = stateOf(id); clearTimeout(state.timer);
+        if (disposed || state.saving || state.paused || state.blocked || !state.dirty || !state.view?.control?.mine || !state.view.draft) return;
+        const seq = state.seq, view = state.view;
+        const payload = { sessionId: id, clientId, epoch: view.control.epoch, revision: view.draft.revision, text: state.text, attachmentCount: state.attachmentCount };
+        state.saving = true; publish(state, "saving");
+        try {
+          const result = await save(payload, AbortSignal.timeout(5000));
+          if (result.draft.revision >= state.view.draft.revision) state.view = { ...state.view, draft: result.draft };
+          if (seq === state.seq) { state.dirty = false; publish(state, result.accepted && state.text === state.view.draft.text && state.attachmentCount === state.view.draft.attachmentCount ? "saved" : "local"); }
+        } catch { if (seq === state.seq) publish(state, "local"); }
+        finally { state.saving = false; if (seq !== state.seq) schedule(id); }
+      }
+      return {
+        receive, flush,
+        attach(id) {
+          const state = stateOf(id); state.references++;
+          if (!state.input) {
+            state.input = getInput(id);
+            if (state.input) {
+              const value = state.input.state.getSnapshot();
+              state.text = value.draft; state.attachmentCount = value.attachmentIds.length;
+              state.touched = value.draft !== "" || value.attachmentIds.length > 0;
+              try { state.blocked = sessionStorage.getItem(blockedKey(id)) !== null; } catch {}
+              state.unsubscribe = state.input.state.subscribe(() => changed(id));
+              if (state.view) receive(id, state.view);
+            }
+          }
+          return () => {
+            if (--state.references > 0) return;
+            void flush(id); state.unsubscribe?.(); state.input = null;
+          };
+        },
+        pause(id) { const state = stateOf(id); clearTimeout(state.timer); state.paused++; state.seq++; state.dirty = false; },
+        finish(id, accepted) {
+          const state = stateOf(id); state.paused = Math.max(0, state.paused - 1);
+          // A failed reply can restore raw references, whitespace or several
+          // submissions. Keep all programmatic restoration local until an
+          // explicit editor input, including after reload.
+          if (!accepted) { state.blocked = true; rememberBlocked(id, true); }
+          if (state.text === "" || state.blocked) state.dirty = false;
+          schedule(id);
+        },
+        edited(id) { const state = stateOf(id); if (state.blocked) { state.blocked = false; rememberBlocked(id, false); state.dirty = !!state.view?.control?.mine; schedule(id); } },
+        status(id) {
+          const state = stateOf(id), draft = state.view?.draft;
+          if (draft?.attachmentCount && (draft.clientId !== clientId || state.attachmentCount < draft.attachmentCount)) return "草稿含未接续附件";
+          if (!state.text && !state.attachmentCount) return "";
+          if (state.phase === "saved") return state.attachmentCount ? "文字已同步 · 附件在本机" : "草稿已同步";
+          return state.phase === "saving" ? "正在保存草稿" : "草稿暂存本机";
+        },
+        restoreText(id) {
+          const state = stateOf(id);
+          if (!state.input || state.text || state.attachmentCount || !state.view?.control?.mine) return;
+          state.input.setDraft(state.view.draft.text);
+        },
+        canRestoreText(id) { const state = stateOf(id); return !!(state.view?.control?.mine && state.view.draft?.attachmentCount && state.view.draft.text && state.view.draft.clientId !== clientId && !state.text && !state.attachmentCount); },
+        flushAll() { for (const id of states.keys()) void flush(id); },
+        dispose() { disposed = true; for (const state of states.values()) { clearTimeout(state.timer); state.unsubscribe?.(); } },
+      };
+    }
 
     class CloudConnectionError extends Error {
       constructor(cause) {
@@ -80,6 +186,7 @@ window.__ModuleLoader__.load({
       const control = async (sessionId, takeover = false, signal) => {
         const value = await api("control", { sessionId, clientId, label, takeover }, signal);
         leases.set(sessionId, value);
+        drafts.receive(sessionId, value);
         return value;
       };
       const createInWorkspace = (workspaceId) => {
@@ -107,18 +214,39 @@ window.__ModuleLoader__.load({
         if (!value.control?.mine) throw new Error("此窗口正在查看会话。点击顶部“接管输入”后即可操作。");
         return api(method, { ...request, clientId, epoch: value.control.epoch }, signal);
       };
+      const drafts = createCloudDraftSync({ clientId, notify: notifyCreation, save: (request, signal) => api("saveDraft", request, signal), getInput: (id) => {
+        const scope = ctx.sessions.scope(id);
+        return scope ? ctx.conversation.input.for(scope) : null;
+      } });
+      ctx.effect(() => {
+        const hidden = () => { if (document.visibilityState === "hidden") drafts.flushAll(); };
+        const editing = (event) => { const id = selection.getSnapshot().sessionId; if (id && event.target?.closest?.('[role="textbox"][contenteditable="true"]')) drafts.edited(id); };
+        document.addEventListener("visibilitychange", hidden);
+        document.addEventListener("beforeinput", editing, true);
+        document.addEventListener("input", editing, true);
+        return () => { document.removeEventListener("visibilitychange", hidden); document.removeEventListener("beforeinput", editing, true); document.removeEventListener("input", editing, true); drafts.dispose(); };
+      }, "remote: cloud draft lifetime");
       const wrappedCall = async (channel, endpoint, payload, signal) => {
         if (channel === "/api" && /^session\/(prompt|cancel|updateQueue|selectModel|rename)$/.test(endpoint)) {
           const request = payload.args.request;
+          const sending = endpoint === "session/prompt";
+          if (sending) drafts.pause(request.sessionId);
+          let accepted = false;
           try {
             const value = leases.get(request.sessionId) ?? await control(request.sessionId);
             if (!value.current) return originalCall(channel, endpoint, payload, signal);
-            const result = await controlled("input", { sessionId: request.sessionId, method: endpoint.split("/")[1], payload: request }, signal);
-            return { ok: true, value: result };
+            const result = await controlled("input", { sessionId: request.sessionId, method: endpoint.split("/")[1], payload: request, ...(sending ? { draftAck: true } : {}) }, signal);
+            accepted = true;
+            if (sending) {
+              drafts.receive(request.sessionId, { ...leases.get(request.sessionId), draft: result.draft });
+            }
+            return { ok: true, value: sending ? result.result : result };
           } catch (error) {
             const message = error instanceof CloudConnectionError && endpoint === "session/prompt" ?
               error.message + " 发送结果尚未确认，草稿已保留。恢复后请先检查会话，再决定是否发送。" : error.message;
             return { ok: false, error: { code: "gateway/bad-request", message, details: {} } };
+          } finally {
+            if (sending) drafts.finish(request.sessionId, accepted);
           }
         }
         return originalCall(channel, endpoint, payload, signal);
@@ -472,12 +600,15 @@ window.__ModuleLoader__.load({
         const current = effective?.current;
         const setView = (value) => {
           leases.set(sessionId, value);
+          drafts.receive(sessionId, value);
           if (activeSession.current !== sessionId) return;
           setSnapshot((previous) => {
             if (previous && previous.sessionId === sessionId && (previous.value.revision > value.revision || JSON.stringify(previous.value) === JSON.stringify(value))) return previous;
             return { sessionId, value };
           });
         };
+        useSyncExternalStore((listener) => { listeners.add(listener); return () => listeners.delete(listener); }, () => drafts.status(sessionId));
+        useEffect(() => sessionId ? drafts.attach(sessionId) : undefined, [sessionId]);
         useEffect(() => {
           setChoosing(false); setError(null);
           if (!sessionId) return;
@@ -595,6 +726,8 @@ window.__ModuleLoader__.load({
               try { setView(await control(sessionId, true)); setError(null); showNotice("已接管输入，可以继续这条会话。"); } catch (failure) { setError(failure); }
             } }, "接管输入"),
           !mine && state?.control ? h("span", { className: "rw-meta", style: { maxWidth: "180px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: state.control.label }, "查看模式 · " + state.control.label) : null,
+          drafts.status(sessionId) ? h("span", { className: "rw-meta" }, drafts.status(sessionId)) : null,
+          drafts.canRestoreText(sessionId) ? h("button", { className: "rw-button", type: "button", title: "仅恢复文字；请在原窗口发送附件，或在当前窗口重新选择附件。", onClick: () => drafts.restoreText(sessionId) }, "仅接续文字") : null,
           pending ? h("span", { className: "rw-pending", title: pending.workspace }, "当前任务结束后切换至 " + shortTarget(pending), mine ? h("button", { type: "button", className: "rw-button", onClick: async () => {
             try { setView(await controlled("discardSwitch", { sessionId })); showNotice("已撤回待切换工作区。"); } catch (failure) { setError(failure); }
           } }, "撤回") : null) : null,
@@ -700,6 +833,6 @@ window.__ModuleLoader__.load({
         history.replaceState(null, "", url.href);
       }
     }
-    return { inject, apply };
+    return { inject, apply, createCloudDraftSync };
   },
 });

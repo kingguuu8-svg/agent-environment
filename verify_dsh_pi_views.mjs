@@ -58,7 +58,7 @@ function fixture(late = false, history = null) {
       if (name === "@deepseek-ai/dsh-client-ui-primitives") return {};
       throw new Error(`Unexpected plugin dependency ${name}`);
     }); } } },
-    document: { documentElement: { dataset: {} }, createElement: () => ({ remove() {} }), head: { append() {} } },
+    document: { documentElement: { dataset: {} }, createElement: () => ({ remove() {} }), head: { append() {} }, addEventListener() {}, removeEventListener() {} },
     sessionStorage: { getItem: () => null, setItem() {} }, performance: { getEntriesByType: () => [] },
     location: { hash: "", search: "", href: "http://127.0.0.1:1" }, URL, URLSearchParams, crypto: { randomUUID },
     setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {},

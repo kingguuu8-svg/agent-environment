@@ -14,7 +14,7 @@ const { createSnapshotStore } = await import(require.resolve("@deepseek-ai/dsh-c
 const clientSource = await readFile(new URL("./dsh-product/plugin/client.js", import.meta.url), "utf8");
 const report = JSON.parse(await readFile(new URL("./.local/verification-dsh-replies.json", import.meta.url), "utf8"));
 const document = { baseURI: "http://127.0.0.1:1/", documentElement: { dataset: {} },
-  querySelector: () => null, createElement: () => ({ dataset: {}, remove() {} }), head: { append() {}, appendChild() {} } };
+  querySelector: () => null, createElement: () => ({ dataset: {}, remove() {} }), head: { append() {}, appendChild() {} }, addEventListener() {}, removeEventListener() {} };
 
 // Feed controlled Markdown tokens to the actual native link renderer in Node.
 // Full Markdown parsing is checked separately in the real browser; this test

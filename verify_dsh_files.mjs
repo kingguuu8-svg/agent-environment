@@ -101,6 +101,7 @@ async function fixture() {
   });
   plugin.apply({
     sessions: { scope: () => scope }, inputTriggers: { sessionOf: () => trigger },
+    conversation: { input: { for: () => null } },
     uiWorkspace: { selection: storeEngine.createSnapshotStore({}), startSession() {} }, sidebarRight: sidebar,
     connection: { rpc: { async call(_channel, endpoint) {
       if (endpoint === "remoteWorkspaces/get") return { ok: true, value: rpcView };

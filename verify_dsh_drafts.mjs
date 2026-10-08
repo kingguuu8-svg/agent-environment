@@ -42,7 +42,7 @@ const selectionInWindow = (storage) => {
   let definition;
   runInNewContext(clientSource, {
     window: { __ModuleLoader__: { load(value) { definition = value; } } },
-    document: { documentElement: { dataset: {} }, createElement() { return { remove() {} }; }, head: { append() {} } },
+    document: { documentElement: { dataset: {} }, createElement() { return { remove() {} }; }, head: { append() {} }, addEventListener() {}, removeEventListener() {} },
     sessionStorage: storage, performance: { getEntriesByType() { return [{ type: "reload" }]; } },
     URL, URLSearchParams, location: { hash: "", search: "", href: "http://127.0.0.1:1" },
     crypto: { randomUUID }, setTimeout, clearTimeout,

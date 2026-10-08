@@ -35,6 +35,7 @@ runInNewContext(source, {
   document: {
     documentElement: { dataset: { remoteDshClient: randomUUID() } },
     createElement() { return { remove() {} }; }, head: { append() {} },
+    addEventListener() {}, removeEventListener() {},
   },
   URLSearchParams, URL, location: { hash: "", search: "", href: origin },
   crypto: { randomUUID }, clearTimeout, setTimeout,

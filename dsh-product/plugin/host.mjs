@@ -5,7 +5,7 @@ import { createMcpToolDefinition } from "@deepseek-ai/dsh-mcp-client";
 import { Session } from "@deepseek-ai/dsh-session";
 import { z as schema } from "zod";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { hostname } from "node:os";
@@ -48,6 +48,8 @@ export class RemoteWorkspaces extends TypertRemoteService {
     mkdirSync(this.stateDir, { recursive: true, mode: 0o700 });
     this.anchorsFile = join(this.stateDir, "anchors.json");
     this.anchors = readJson(this.anchorsFile, {});
+    this.draftsDir = join(this.stateDir, "drafts");
+    mkdirSync(this.draftsDir, { recursive: true, mode: 0o700 });
     this.environment = new Environment({ stateDir: this.stateDir, config: config.targets, python: config.python, cloudWorkspace: config.cloudWorkspace });
     this.leases = new Map();
     this.authorized = new AsyncLocalStorage();
@@ -192,7 +194,28 @@ export class RemoteWorkspaces extends TypertRemoteService {
     return { ...state, current: state.current ? { ...state.current, hostname: this.binding(state.current.id).hostname } : null,
       pending: state.pending ? { ...state.pending, hostname: this.binding(state.pending.id).hostname } : null,
       connection: state.current ? this.connectionState(state.current.id) : null,
-      running: agent.status === "running", control: lease ? { mine: lease.clientId === clientId, label: lease.label, epoch: lease.clientId === clientId ? lease.epoch : null } : null };
+      running: agent.status === "running", draft: this.readDraft(agent.id), control: lease ? { mine: lease.clientId === clientId, label: lease.label, epoch: lease.clientId === clientId ? lease.epoch : null } : null };
+  }
+  draftFile(sessionId) { return join(this.draftsDir, createHash("sha256").update(sessionId).digest("hex") + ".json"); }
+  readDraft(sessionId) { return readJson(this.draftFile(sessionId), { text: "", attachmentCount: 0, revision: 0, clientId: null }); }
+  writeDraft(sessionId, text, attachmentCount, clientId) {
+    const draft = { text, attachmentCount, clientId, revision: this.readDraft(sessionId).revision + 1 };
+    writeJson(this.draftFile(sessionId), draft);
+    return draft;
+  }
+  async saveDraft(request) {
+    checkRequest(request); checkController(request);
+    if (typeof request.text !== "string" || Buffer.byteLength(request.text, "utf8") > 262144
+      || !Number.isSafeInteger(request.revision) || request.revision < 0
+      || !Number.isSafeInteger(request.attachmentCount) || request.attachmentCount < 0 || request.attachmentCount > 1000) fail("Invalid conversation draft");
+    const agent = await this.agent(request.sessionId);
+    return this.serialize(agent.id, async () => {
+      this.requireControl(agent, request);
+      const draft = this.readDraft(agent.id);
+      if (draft.text === request.text && draft.attachmentCount === request.attachmentCount && (!draft.attachmentCount || draft.clientId === request.clientId)) return { accepted: true, draft };
+      if (draft.revision !== request.revision) return { accepted: false, draft };
+      return { accepted: true, draft: this.writeDraft(agent.id, request.text, request.attachmentCount, request.clientId) };
+    });
   }
   requireControl(agent, request) {
     const lease = this.controllerLease(agent);
@@ -439,7 +462,14 @@ export class RemoteWorkspaces extends TypertRemoteService {
     const agent = await this.agent(request.payload?.sessionId);
     return this.serialize(agent.id, async () => {
       this.requireControl(agent, request);
-      return this.authorized.run(agent.id, () => this.host.sessionController[request.method](request.payload, signal));
+      const matches = (message) => message.source?.kind === "user" && message.source.rpcId === request.payload?.requestId;
+      const duplicate = request.method === "prompt" && (agent.inbox.nextTurn.some(matches) || agent.inbox.nextStep.some(matches)
+        || agent.session.snapshotEvents().some((event) => event.type === "user/message" && matches(event.data)));
+      const result = await this.authorized.run(agent.id, () => this.host.sessionController[request.method](request.payload, signal));
+      // An accepted message fences delayed pre-send autosaves, even when the
+      // cloud draft was already empty. Drafts never enter model history.
+      if (request.method === "prompt" && !duplicate) this.writeDraft(agent.id, "", 0, request.clientId);
+      return request.method === "prompt" && request.draftAck === true ? { result, draft: this.readDraft(agent.id) } : result;
     });
   }
   installInputGuard() {
@@ -664,7 +694,7 @@ export class RemoteWorkspaces extends TypertRemoteService {
 }
 
 // Native JS decorators keep this plugin on DSH's authenticated Typert RPC carrier.
-for (const method of ["catalog", "deviceInstaller", "deviceInstallerStatus", "deviceInstallerConfirm", "browse", "pick", "get", "probe", "control", "switch", "discardSwitch", "input", "toolOrigin", "replyOrigin"]) {
+for (const method of ["catalog", "deviceInstaller", "deviceInstallerStatus", "deviceInstallerConfirm", "browse", "pick", "get", "probe", "control", "saveDraft", "switch", "discardSwitch", "input", "toolOrigin", "replyOrigin"]) {
   Remote(RemoteWorkspaces.prototype[method], { kind: "method", name: method, private: false, static: false, addInitializer: (initializer) => invocationInitializers.push(initializer) });
 }
 

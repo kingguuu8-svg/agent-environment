@@ -14,6 +14,7 @@
 | 输入权持久恢复与分支独立 | `verify_dsh_ownership.py`，独立原生 Host、本地 SSE 模型、两次停启 | 7 项通过 |
 | 客户端发送失败与返回结果 | `verify_dsh_client.mjs`，实际客户端拦截器、loopback HTTP 服务 | 4 项通过 |
 | 多窗口草稿与会话选择恢复 | `verify_dsh_drafts.mjs`，原生 Store 引擎、实际工厂与插件、模拟浏览器存储 | 13 项通过 |
+| 跨设备云草稿、发送与恢复 | `verify_dsh_cloud_drafts.py` 与 `.mjs`，隔离原生 Host、已认证原生浏览器 RPC、实际插件与原生 SnapshotStore | 10 项 Host 与 12 项客户端检查通过 |
 | 文件侧栏与引用菜单切换顺序 | `verify_dsh_files.mjs`，实际客户端组件、原生文件树、引用控制器与 Store、React 渲染器 | 8 项通过 |
 | 远端文件补全与实际引用读取 | `verify_dsh_references.py`，独立 Host、loopback SSH、本地 SSE 模型与真实 Pi 工具 | 10 项通过 |
 | 原生搜索、工具更新与迟到结果 | `verify_workspace_references.mjs`，锁定的 DSH 搜索、实际 MCP worker 与 Host 路由 | 7 项通过 |
@@ -63,6 +64,7 @@ node verify_mcp_discovery.mjs
 .venv/bin/python verify_dsh_ownership.py --node /home/kingguuu8/.local/node/bin/node
 /home/kingguuu8/.local/node/bin/node verify_dsh_client.mjs
 node verify_dsh_drafts.mjs
+.venv/bin/python verify_dsh_cloud_drafts.py --node /home/kingguuu8/.local/node/bin/node
 node verify_dsh_files.mjs
 node dsh-product/sync-file-search.mjs --check
 node verify_workspace_references.mjs
@@ -295,6 +297,20 @@ Host 现在将绑定会话的原生补全请求发送到当前目标 worker，�
 新版只替换 VPS4 的共享环境与 Host 两份源码，原件与权限保留备份。35 个会话日志与五项投影、26 个控制窗口、七个工作区分组、六份配置和机器清单保持；三台机器的原生文件与引用检查通过。生产页面恢复原设备、查看模式与连接，浏览器无脚本错误，验证没有生产模型请求。临时进程、目录与页面已清理。
 
 首次环境发现会等待当前服务的连接结果，最长约 12 秒；成功连接后的服务继续使用现有工具契约，重试失败服务时仍可能等待同一时限。macOS 与 Windows 原生安装仍待真机验证。
+
+## 跨设备云草稿
+
+2026 年 10 月 8 日，两个使用不同浏览器存储的入口复现：B 能看到 A 的云端历史并接管，但输入框仍为空。原有草稿只在各自浏览器保存。本轮将当前输入窗口的文字草稿保存在 VPS4 的独立私有文件中，通过已有控制者、进程凭据和草稿版本校验写入；空编辑器恢复云端文字，已有本机原稿保持。
+
+`verify_dsh_cloud_drafts.py` 的 10 项真实 Host 检查通过，覆盖权限与版本拒绝、幂等保存、接管、输入校验、两次重启、分支独立、消息接纳后的清空及迟到保存拒绝，以及重复消息保留下一条草稿。保存草稿保持五项原生投影，模型只收到明确提交的内容。`verify_dsh_cloud_drafts.mjs` 的 12 项检查使用实际插件、原生 SnapshotStore 和已认证的原生浏览器 RPC，连接同一隔离 Host，验证两个设备接续、本机内容优先、回包丢失、离线恢复、发送竞态、附件提示、卸载与直接返回原生发送结果。五次明确提交对应五条本地模型请求。
+
+12 项浏览器与集成检查使用不同存储域、实际 DSH 输入框、loopback SSH 和本地 SSE 模型。A 的草稿在 B 恢复，B 接管后编辑，A 的原稿、双方的会话选择与其他项目草稿均保留。云端停启后，离线编辑继续同步；明确发送后，刷新保持空草稿。另一设备先看到附件缺失提示，明确选择仅接续文字后，原窗口的实际图片仍保留。发送失败恢复的空格原稿在重连和刷新后留在本机，明确键入后重新同步。模型只收到两条准备历史与一条明确发送内容，共三条请求。
+
+原生发送失败会恢复原始空格与文件引用，并可能合并多个失败发送的原稿。因此，本轮以发送失败状态阻止程序恢复自动上传，沿用原生编辑事件识别用户再次键入或粘贴，保留控制窗口自己的原稿。实现继续使用已有客户端插件与原生输入接口。
+
+上下文与接力 24 项、输入权七项、客户端异常四项、多窗口恢复 13 项、文件树八项、接力取消九项、工具展示十项与回复组件九项回归通过。证据位于 `.local/verification-dsh-cloud-drafts-before.json`、`.local/verification-dsh-cloud-drafts.json` 和 `.local/verification-dsh-cloud-drafts-ui.json`。浏览器验证覆盖 Linux；macOS 与 Windows 真机仍待验证。附件内容由原窗口保管，云端只保存文字和附件数量；刷新后需要重新选择未发送的附件。
+
+新版已部署到 VPS4，只替换 Host 与客户端两份源码，原件与权限保留备份。35 个会话日志与五项投影、26 个控制窗口、七个工作区分组、六份配置和机器清单保持；三台机器的文件与引用检查通过。原生产页面刷新后保留原工作区和查看权限，实际目标已连接，浏览器无脚本错误。生产验证没有发送消息、接管或切换，部署证据位于 `.local/verification-dsh-cloud-drafts-deployed.json`。临时 Host、SSH、模型与浏览器窗口已清理。
 
 ## 设备安装
 
