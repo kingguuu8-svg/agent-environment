@@ -7,11 +7,16 @@ window.__ModuleLoader__.load({
     const { useState, useEffect, useRef, useMemo, useSyncExternalStore } = React;
     const inject = ["connection", "sessions", "workspaces", "slots", "uiWorkspace", "layout", "sidebarRight", "inputTriggers", "conversation"];
 
-    function createCloudDraftSync({ clientId, getInput, save, notify }) {
+    function createCloudDraftSync({ clientId, getInput, save, select, isCurrent = () => true, notify }) {
       const states = new Map();
       let disposed = false;
+      const retainedKey = (id) => `remote-dsh-retained-drafts.${id}`;
       const stateOf = (id) => {
-        if (!states.has(id)) states.set(id, { phase: "local", view: null, input: null, touched: false, dirty: false, seq: 0, paused: 0, references: 0, text: "", attachmentCount: 0 });
+        if (!states.has(id)) {
+          let retained = [];
+          try { const saved = JSON.parse(sessionStorage.getItem(retainedKey(id))); if (Array.isArray(saved) && saved.every((text) => typeof text === "string" && text)) retained = saved; } catch {}
+          states.set(id, { phase: "local", view: null, input: null, touched: false, dirty: false, seq: 0, paused: 0, selecting: false, retained, references: 0, text: "", attachmentCount: 0 });
+        }
         return states.get(id);
       };
       const publish = (state, phase) => { state.phase = phase; if (!disposed) notify(); };
@@ -19,7 +24,7 @@ window.__ModuleLoader__.load({
       const rememberBlocked = (id, blocked) => { try { if (!blocked) sessionStorage.removeItem(blockedKey(id)); else sessionStorage.setItem(blockedKey(id), "1"); } catch {} };
       const schedule = (id) => {
         const state = stateOf(id); clearTimeout(state.timer);
-        if (!disposed && state.dirty && !state.paused && !state.blocked && state.view?.control?.mine) state.timer = setTimeout(() => flush(id), 450);
+        if (!disposed && state.dirty && !state.paused && !state.selecting && !state.blocked && state.view?.control?.mine) state.timer = setTimeout(() => flush(id), 450);
       };
       const changed = (id) => {
         const state = stateOf(id), value = state.input.state.getSnapshot();
@@ -42,7 +47,7 @@ window.__ModuleLoader__.load({
         if (view.control?.mine && draft?.revision === 0 && state.input && (state.text || state.attachmentCount) && !state.blocked && !state.dirty) state.dirty = true;
         // Only an untouched editor follows the cloud. Local notes remain local
         // until the user edits them; attachment bytes belong to their window.
-        if (draft && state.input && !state.touched && !state.paused && draft.attachmentCount === 0 && state.text !== draft.text) {
+        if (draft && state.input && !state.touched && !state.paused && !state.selecting && !state.blocked && draft.attachmentCount === 0 && state.text !== draft.text) {
           state.seed = draft.text;
           state.input.setDraft(draft.text);
         }
@@ -53,7 +58,7 @@ window.__ModuleLoader__.load({
       };
       async function flush(id) {
         const state = stateOf(id); clearTimeout(state.timer);
-        if (disposed || state.saving || state.paused || state.blocked || !state.dirty || !state.view?.control?.mine || !state.view.draft) return;
+        if (disposed || state.saving || state.paused || state.selecting || state.blocked || !state.dirty || !state.view?.control?.mine || !state.view.draft) return;
         const seq = state.seq, view = state.view;
         const payload = { sessionId: id, clientId, epoch: view.control.epoch, revision: view.draft.revision, text: state.text, attachmentCount: state.attachmentCount };
         state.saving = true; publish(state, "saving");
@@ -97,17 +102,57 @@ window.__ModuleLoader__.load({
         edited(id) { const state = stateOf(id); if (state.blocked) { state.blocked = false; rememberBlocked(id, false); state.dirty = !!state.view?.control?.mine; schedule(id); } },
         status(id) {
           const state = stateOf(id), draft = state.view?.draft;
+          if (state.selecting) return "正在接续草稿";
           if (draft?.attachmentCount && (draft.clientId !== clientId || state.attachmentCount < draft.attachmentCount)) return "草稿含未接续附件";
+          if (state.text && draft?.text && state.text !== draft.text && !state.dirty && !state.saving) return "本机原稿 · 云端有另一份";
           if (!state.text && !state.attachmentCount) return "";
           if (state.phase === "saved") return state.attachmentCount ? "文字已同步 · 附件在本机" : "草稿已同步";
           return state.phase === "saving" ? "正在保存草稿" : "草稿暂存本机";
         },
-        restoreText(id) {
-          const state = stateOf(id);
-          if (!state.input || state.text || state.attachmentCount || !state.view?.control?.mine) return;
-          state.input.setDraft(state.view.draft.text);
+        snapshot(id) { const state = stateOf(id); return [state.phase, state.seq, state.selecting, state.view?.draft?.revision, state.retained.length, state.view?.control?.mine].join("|"); },
+        canChoose(id) {
+          const state = stateOf(id), draft = state.view?.draft;
+          return !!(state.retained.length || (draft?.text && draft.text !== state.text) || (draft?.attachmentCount && draft.clientId !== clientId));
         },
-        canRestoreText(id) { const state = stateOf(id); return !!(state.view?.control?.mine && state.view.draft?.attachmentCount && state.view.draft.text && state.view.draft.clientId !== clientId && !state.text && !state.attachmentCount); },
+        preview(id) {
+          const state = stateOf(id);
+          return { sessionId: id, text: state.text, attachmentCount: state.attachmentCount, seq: state.seq, draft: { ...state.view?.draft }, control: { ...state.view?.control }, retained: [...state.retained] };
+        },
+        async selectText(id, preview, text, signal) {
+          const state = stateOf(id);
+          if (disposed || !state.input || !isCurrent(id) || state.paused || state.selecting || preview.sessionId !== id
+            || preview.seq !== state.seq || preview.text !== state.text || preview.attachmentCount !== state.attachmentCount) throw new Error("输入内容或会话已变化，请重新查看草稿后选择。");
+          if (state.attachmentCount) throw new Error("当前输入框含附件，请先发送或移除附件，再接续其他草稿。");
+          if (preview.draft.revision !== state.view?.draft?.revision) throw new Error("云端草稿已更新，请重新查看后选择。");
+          if (preview.control.mine !== state.view?.control?.mine || preview.control.epoch !== state.view?.control?.epoch) throw new Error("输入权已更新，请重新查看草稿后选择。");
+          // Persist before touching either editor or cloud. Keep every displaced
+          // text, deduplicated, so repeated choices remain reversible on reload.
+          if (state.text && state.text !== text && !state.retained.includes(state.text)) {
+            const retained = [...state.retained, state.text];
+            try { sessionStorage.setItem(retainedKey(id), JSON.stringify(retained)); }
+            catch { throw new Error("无法保存本机原稿，当前内容已保留。请释放浏览器存储空间后重试。"); }
+            state.retained = retained;
+          }
+          clearTimeout(state.timer); state.dirty = false; state.selecting = true;
+          const seq = ++state.seq;
+          publish(state, "local");
+          try {
+            const value = await select({ sessionId: id, clientId, epoch: preview.control.epoch, takeover: !preview.control.mine, revision: preview.draft.revision, text }, signal);
+            signal?.throwIfAborted();
+            if (disposed || !state.input || !isCurrent(id) || seq !== state.seq) throw new Error("会话或输入内容已变化，原稿已保留，请重新查看草稿后选择。");
+            if (value.draft.revision < state.view.draft.revision) throw new Error("云端草稿已再次更新，原稿已保留，请重新查看后选择。");
+            receive(id, value);
+            state.touched = true; state.blocked = false; rememberBlocked(id, false);
+            state.seed = text; state.input.setDraft(text); state.dirty = false;
+            publish(state, "saved");
+            return value;
+          } catch (error) {
+            // A lost reply can mean selection committed. Do not republish the
+            // old local text while reconciling; an explicit edit releases it.
+            state.dirty = false; state.blocked = true; rememberBlocked(id, true);
+            publish(state, "local"); throw error;
+          } finally { state.selecting = false; if (!disposed) notify(); }
+        },
         flushAll() { for (const id of states.keys()) void flush(id); },
         dispose() { disposed = true; for (const state of states.values()) { clearTimeout(state.timer); state.unsubscribe?.(); } },
       };
@@ -214,7 +259,8 @@ window.__ModuleLoader__.load({
         if (!value.control?.mine) throw new Error("此窗口正在查看会话。点击顶部“接管输入”后即可操作。");
         return api(method, { ...request, clientId, epoch: value.control.epoch }, signal);
       };
-      const drafts = createCloudDraftSync({ clientId, notify: notifyCreation, save: (request, signal) => api("saveDraft", request, signal), getInput: (id) => {
+      const drafts = createCloudDraftSync({ clientId, notify: notifyCreation, save: (request, signal) => api("saveDraft", request, signal),
+        select: (request, signal) => api("selectDraft", { ...request, label }, signal), isCurrent: (id) => selection.getSnapshot().sessionId === id, getInput: (id) => {
         const scope = ctx.sessions.scope(id);
         return scope ? ctx.conversation.input.for(scope) : null;
       } });
@@ -274,6 +320,7 @@ window.__ModuleLoader__.load({
         .rw-status{position:fixed;right:24px;bottom:70px;z-index:1100;background:var(--dsw-alias-bg-layer-2,#202124);color:var(--dsw-alias-label-primary,#eee);border:1px solid #80808050;border-radius:12px;padding:13px 16px;display:flex;align-items:center;gap:10px;max-width:min(480px,calc(100vw - 48px));box-shadow:0 8px 24px #0003;font-size:13px;line-height:1.5}
         .rw-dialog{width:720px!important;max-width:100%;max-height:100%;overflow:hidden!important;display:flex!important;flex-direction:column;gap:0!important;padding:24px!important;font-family:inherit;color:var(--dsw-alias-label-primary,#eee)}
         .rw-dialog-body{overflow:auto;min-height:0;padding-right:2px}.rw-dialog-heading,.rw-description,.rw-selection,.rw-footer{flex-shrink:0}.rw-dialog h2{margin:0;font-size:20px;line-height:1.5;font-weight:550}.rw-dialog-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:4px}.rw-description{font-size:13px;color:var(--dsw-alias-label-secondary,#999);margin:0 0 20px;line-height:1.6}
+        .rw-draft-choices{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}.rw-draft-choices [aria-checked="true"]{border-color:#729aff;background:#729aff18}.rw-draft-preview{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-size:14px;line-height:1.6;padding:14px;border:1px solid var(--dsw-alias-border-l4,#80808040);border-radius:10px;margin:0;max-height:35vh;overflow:auto}
         .rw-row{display:flex;align-items:center;gap:8px;margin-bottom:12px}.rw-row label{font-size:13px}.rw-input{flex:1;min-width:0;border:1px solid var(--dsw-alias-border-l4,#80808060);border-radius:8px;background:var(--dsw-alias-interactive-bg-hover,#80808012);color:inherit;font:inherit;padding:9px 11px;font-size:13px;outline:none}.rw-input:focus{border-color:#729aff}
         .rw-folders{height:clamp(100px,20vh,180px);overflow:auto;border:1px solid var(--dsw-alias-border-l4,#80808040);border-radius:10px;padding:6px}.rw-folder{display:flex;gap:10px;align-items:center;width:100%;border:0;background:transparent;color:inherit;padding:9px 11px;text-align:left;border-radius:6px;cursor:pointer;font:inherit;font-size:13px}.rw-folder span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.rw-folder .rw-chevron{margin-left:auto;color:var(--dsw-alias-label-tertiary,#888)}
         .rw-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;padding-top:16px;margin-top:16px;border-top:1px solid var(--dsw-alias-border-l4,#80808040)}.rw-footer-actions{display:flex;gap:8px;flex-shrink:0}.rw-empty{padding:30px;text-align:center;color:var(--dsw-alias-label-secondary,#999);font-size:13px;line-height:1.7}
@@ -584,10 +631,53 @@ window.__ModuleLoader__.load({
           onPicked(picked.cwd);
         } });
       }
+      function DraftChoiceDialog({ preview, onCancel, onSelect, onRefresh }) {
+        const candidates = [{ key: "cloud", label: "云端草稿", text: preview.draft.text ?? "", attachmentCount: preview.draft.attachmentCount ?? 0 },
+          ...preview.retained.slice().reverse().map((text, index) => ({ key: `local-${index}`, label: "本机原稿" + (preview.retained.length > 1 ? ` ${preview.retained.length - index}` : ""), text }))];
+        const initial = candidates[0].text && (candidates[0].text !== preview.text || candidates[0].attachmentCount) ? "cloud" : candidates[1]?.key ?? "cloud";
+        const [choice, setChoice] = useState(initial);
+        const [busy, setBusy] = useState(false);
+        const [error, setError] = useState("");
+        const request = useRef();
+        const mounted = useRef(true);
+        useEffect(() => () => { mounted.current = false; request.current?.abort(); }, []);
+        useEffect(() => { setChoice(initial); }, [preview]);
+        const selected = candidates.find((item) => item.key === choice) ?? candidates[0];
+        const cancel = () => { request.current?.abort(); onCancel(); };
+        const run = async (refresh = false) => {
+          if (busy) return;
+          const abort = new AbortController(); request.current = abort;
+          setBusy(true); setError("");
+          try {
+            const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(5000)]);
+            await (refresh ? onRefresh(signal) : onSelect(preview, selected, signal));
+          } catch (failure) {
+            if (mounted.current && !abort.signal.aborted) setError(failure.name === "TimeoutError" ? "云端结果暂未确认，原稿已保留。重新查看草稿后再选择。" : failure.message);
+          } finally { if (mounted.current) setBusy(false); }
+        };
+        const blocked = preview.attachmentCount > 0;
+        const same = selected.text === preview.text && !selected.attachmentCount;
+        const action = selected.key === "cloud" ? selected.attachmentCount ? "仅接续文字" : "接续云端草稿" : "恢复本机原稿";
+        return h(Modal, { open: true, headless: true, title: "接续草稿", onClose: cancel, className: "rw-dialog" },
+          h("div", { className: "rw-dialog-heading" }, h("h2", null, "接续草稿"), h("button", { type: "button", className: "rw-button", "aria-label": "关闭草稿预览", onClick: cancel }, "×")),
+          h("p", { className: "rw-description" }, "选择要继续编辑的文字。替换前会在当前窗口保留原稿，刷新后仍可恢复。"),
+          h("div", { className: "rw-dialog-body" },
+            h("div", { className: "rw-draft-choices", role: "radiogroup", "aria-label": "草稿来源" }, candidates.map((item) => h("button", { type: "button", className: "rw-button", key: item.key, role: "radio", "aria-checked": selected.key === item.key, disabled: busy, onClick: () => { setChoice(item.key); setError(""); } }, item.label))),
+            h("pre", { className: "rw-draft-preview", "aria-label": selected.label + "内容" }, selected.text || "暂无文字草稿"),
+            selected.attachmentCount ? h("p", { className: "rw-meta" }, `此草稿有 ${selected.attachmentCount} 个附件，保留在原窗口。接续后请重新选择附件，或回原窗口发送。`) : null,
+            blocked ? h("p", { className: "rw-error", role: "alert" }, "当前输入框含附件，请先发送或移除附件，再接续其他草稿。") : null,
+            !preview.control.mine ? h("p", { className: "rw-meta" }, "确认后，此窗口接管输入。会话历史和工作区保持。") : null,
+            error ? h("p", { className: "rw-error", role: "alert" }, error) : null),
+          h("div", { className: "rw-footer" }, h("div", { className: "rw-footer-actions" },
+            h("button", { type: "button", className: "rw-button", disabled: busy, onClick: () => run(true) }, "重新查看"),
+            h("button", { type: "button", className: "rw-button", onClick: cancel }, "保留当前输入"),
+            h("button", { type: "button", className: "rw-button rw-primary", disabled: busy || blocked || !selected.text || same, onClick: () => run() }, busy ? "正在连接…" : (preview.control.mine ? "" : "接管并") + action))));
+      }
       function WorkspaceHeader({ sessionId, useProjection }) {
         const binding = useProjection("remoteBinding");
         const [snapshot, setSnapshot] = useState(null);
         const [choosing, setChoosing] = useState(false);
+        const [draftPreview, setDraftPreview] = useState(null);
         const [error, setError] = useState(null);
         const [probing, setProbing] = useState(null);
         const previousTarget = useRef();
@@ -607,10 +697,10 @@ window.__ModuleLoader__.load({
             return { sessionId, value };
           });
         };
-        useSyncExternalStore((listener) => { listeners.add(listener); return () => listeners.delete(listener); }, () => drafts.status(sessionId));
+        useSyncExternalStore((listener) => { listeners.add(listener); return () => listeners.delete(listener); }, () => drafts.snapshot(sessionId));
         useEffect(() => sessionId ? drafts.attach(sessionId) : undefined, [sessionId]);
         useEffect(() => {
-          setChoosing(false); setError(null);
+          setChoosing(false); setDraftPreview(null); setError(null);
           if (!sessionId) return;
           let disposed = false, refreshing = false, timer;
           const abort = new AbortController();
@@ -727,12 +817,25 @@ window.__ModuleLoader__.load({
             } }, "接管输入"),
           !mine && state?.control ? h("span", { className: "rw-meta", style: { maxWidth: "180px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: state.control.label }, "查看模式 · " + state.control.label) : null,
           drafts.status(sessionId) ? h("span", { className: "rw-meta" }, drafts.status(sessionId)) : null,
-          drafts.canRestoreText(sessionId) ? h("button", { className: "rw-button", type: "button", title: "仅恢复文字；请在原窗口发送附件，或在当前窗口重新选择附件。", onClick: () => drafts.restoreText(sessionId) }, "仅接续文字") : null,
+          drafts.canChoose(sessionId) ? h("button", { className: "rw-button", type: "button", disabled: cloudUnavailable, onClick: () => setDraftPreview(drafts.preview(sessionId)) }, "查看草稿") : null,
           pending ? h("span", { className: "rw-pending", title: pending.workspace }, "当前任务结束后切换至 " + shortTarget(pending), mine ? h("button", { type: "button", className: "rw-button", onClick: async () => {
             try { setView(await controlled("discardSwitch", { sessionId })); showNotice("已撤回待切换工作区。"); } catch (failure) { setError(failure); }
           } }, "撤回") : null) : null,
           ["unavailable", "cloud-offline"].includes(availability) && !error?.loginExpired ? h("button", { className: "rw-button", type: "button", onClick: () => { refreshNow.current(); probeNow.current(); } }, cloudUnavailable ? "重连云端" : "重新检查工作区") : null,
           error ? h("span", { role: "alert", className: "rw-error", title: error.cause?.message ?? error.message }, cloudUnavailable && !error.loginExpired ? "正在自动重连，未发送内容保留在当前浏览器。" : error.message) : null,
+          draftPreview ? h(DraftChoiceDialog, { preview: draftPreview, onCancel: () => setDraftPreview(null),
+            onRefresh: async (signal) => {
+              const value = await api("get", { sessionId, clientId }, signal);
+              signal.throwIfAborted(); setView(value);
+              if (activeSession.current === sessionId) setDraftPreview(drafts.preview(sessionId));
+            },
+            onSelect: async (preview, selected, signal) => {
+              const value = await drafts.selectText(sessionId, preview, selected.text, signal);
+              setView(value);
+              if (activeSession.current !== sessionId) return;
+              setDraftPreview(null); setError(null);
+              showNotice((selected.key === "cloud" ? "已接续云端文字。" : "已恢复本机原稿。") + (preview.text && preview.text !== selected.text ? "原输入已保留，可从“查看草稿”恢复。" : ""));
+            } }) : null,
           choosing ? h(DirectoryDialog, { title: "工作环境", initial: current, switching: true, canChoose: !!mine,
             onHandoff: !cloudUnavailable && state?.control ? (chosen, signal) => selectWorkspace(chosen, true, signal) : undefined,
             actionLabel: "切换到此工作区", connection: { ...connection, status: availability, ...(error ? { error: error.message, loginExpired: !!error.loginExpired } : {}) }, onProbe: () => probeNow.current(), onCancel: () => setChoosing(false), onChoose: (chosen, signal) => selectWorkspace(chosen, false, signal) }) : null);

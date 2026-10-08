@@ -384,6 +384,115 @@ def verify(args, base, model_url):
             passed(
                 "cloud drafts use private atomic files, independent session identities and no extra model requests"
             )
+            choice_sid = api.rpc(
+                "session/create", {"request": {"workspaceId": picked["workspaceId"]}}
+            )["sessionId"]
+            choice_owner, choice_viewer = str(uuid.uuid4()), str(uuid.uuid4())
+            choice_view = api.remote(
+                "control", {"sessionId": choice_sid, "clientId": choice_owner}
+            )
+            choice_saved = api.remote(
+                "saveDraft",
+                {
+                    "sessionId": choice_sid,
+                    "clientId": choice_owner,
+                    "epoch": choice_view["control"]["epoch"],
+                    "revision": 0,
+                    "text": "CLOUD-CHOICE\n保留中文文字。",
+                    "attachmentCount": 2,
+                },
+            )["draft"]
+            choice_request = {
+                "sessionId": choice_sid,
+                "clientId": choice_viewer,
+                "revision": choice_saved["revision"],
+                "text": choice_saved["text"],
+                "takeover": True,
+            }
+            choice_before = api.remote(
+                "get", {"sessionId": choice_sid, "clientId": choice_owner}
+            )
+            api.remote(
+                "selectDraft", {**choice_request, "takeover": False}, rejected=True
+            )
+            for invalid in [
+                {"text": None},
+                {"text": "界" * 90000},
+                {"revision": -1},
+                {"revision": 1.1},
+                {"clientId": "invalid"},
+            ]:
+                api.remote("selectDraft", {**choice_request, **invalid}, rejected=True)
+            assert (
+                api.remote("get", {"sessionId": choice_sid, "clientId": choice_owner})
+                == choice_before
+            )
+            passed(
+                "draft selection rejects unauthorized viewers, invalid identities, noninteger revisions and excessive UTF-8 text without side effects"
+            )
+            api.remote("selectDraft", {**choice_request, "revision": 0}, rejected=True)
+            assert (
+                api.remote("get", {"sessionId": choice_sid, "clientId": choice_owner})
+                == choice_before
+            )
+            passed(
+                "a stale draft confirmation cannot take control from its source device"
+            )
+            choice_selected = api.remote("selectDraft", choice_request)
+            assert choice_selected["control"]["mine"]
+            assert choice_selected["draft"] == {
+                **choice_saved,
+                "revision": choice_saved["revision"] + 1,
+                "attachmentCount": 0,
+                "clientId": choice_viewer,
+            }
+            assert all(
+                choice_selected[key] == choice_before[key]
+                for key in ["current", "pending", "revision", "running"]
+            )
+            passed(
+                "explicit text-only selection claims input and advances the draft while preserving the execution workspace and task state"
+            )
+            choice_epoch = choice_selected["control"]["epoch"]
+            fenced = api.remote(
+                "selectDraft",
+                {
+                    **choice_request,
+                    "takeover": False,
+                    "epoch": choice_epoch,
+                    "revision": choice_selected["draft"]["revision"],
+                },
+            )
+            assert fenced["control"]["epoch"] == choice_epoch
+            assert (
+                fenced["draft"]["revision"] == choice_selected["draft"]["revision"] + 1
+            )
+            assert not api.remote(
+                "saveDraft",
+                {
+                    "sessionId": choice_sid,
+                    "clientId": choice_viewer,
+                    "epoch": choice_epoch,
+                    "revision": choice_selected["draft"]["revision"],
+                    "text": "LATE-SAME-DEVICE",
+                    "attachmentCount": 0,
+                },
+            )["accepted"]
+            passed(
+                "same-controller draft selection fences late autosaves even when the chosen text is unchanged"
+            )
+            stop()
+            api = start()
+            choice_restored = api.remote(
+                "get", {"sessionId": choice_sid, "clientId": choice_viewer}
+            )
+            assert choice_restored["draft"] == fenced["draft"]
+            assert choice_restored["control"]["mine"]
+            assert choice_restored["current"] == fenced["current"]
+            assert len(FixtureModel.requests) == 1
+            passed(
+                "Host restart preserves the selected draft and input owner without adding a model turn"
+            )
             cookies = next(
                 handler.cookiejar
                 for handler in api.browser.handlers
@@ -409,7 +518,7 @@ def verify(args, base, model_url):
             )
             print(client_checks.stdout, end="", flush=True)
             client_report = json.loads(client_checks.stdout.splitlines()[-1])
-            assert client_report["checks"] == 12
+            assert client_report["checks"] == 26
             wait_for(
                 lambda: api.rpc("session/list", {"_request": {}})["items"],
                 lambda items: all(

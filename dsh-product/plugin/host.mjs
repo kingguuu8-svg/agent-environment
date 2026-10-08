@@ -217,6 +217,22 @@ export class RemoteWorkspaces extends TypertRemoteService {
       return { accepted: true, draft: this.writeDraft(agent.id, request.text, request.attachmentCount, request.clientId) };
     });
   }
+  async selectDraft(request) {
+    checkRequest(request); checkController(request);
+    if (typeof request.text !== "string" || Buffer.byteLength(request.text, "utf8") > 262144
+      || !Number.isSafeInteger(request.revision) || request.revision < 0) fail("Invalid conversation draft");
+    const agent = await this.agent(request.sessionId);
+    return this.serialize(agent.id, async () => {
+      if (request.takeover !== true) this.requireControl(agent, request);
+      if (this.readDraft(agent.id).revision !== request.revision) fail("云端草稿已更新，请重新查看后选择。");
+      if (request.takeover === true && this.claimControl(agent, request)) await this.checkpoint(agent);
+      // Selection always advances the revision, including for unchanged text.
+      // A pending autosave from this same controller must not undo the choice.
+      // Attachment bytes stay in their source browser; this selects text only.
+      this.writeDraft(agent.id, request.text, 0, request.clientId);
+      return this.view(agent, request.clientId);
+    });
+  }
   requireControl(agent, request) {
     const lease = this.controllerLease(agent);
     if (!lease || lease.clientId !== request.clientId || lease.epoch !== request.epoch) fail("此会话已由另一窗口接管。请点击“接管输入”后继续。");
@@ -694,7 +710,7 @@ export class RemoteWorkspaces extends TypertRemoteService {
 }
 
 // Native JS decorators keep this plugin on DSH's authenticated Typert RPC carrier.
-for (const method of ["catalog", "deviceInstaller", "deviceInstallerStatus", "deviceInstallerConfirm", "browse", "pick", "get", "probe", "control", "saveDraft", "switch", "discardSwitch", "input", "toolOrigin", "replyOrigin"]) {
+for (const method of ["catalog", "deviceInstaller", "deviceInstallerStatus", "deviceInstallerConfirm", "browse", "pick", "get", "probe", "control", "saveDraft", "selectDraft", "switch", "discardSwitch", "input", "toolOrigin", "replyOrigin"]) {
   Remote(RemoteWorkspaces.prototype[method], { kind: "method", name: method, private: false, static: false, addInitializer: (initializer) => invocationInitializers.push(initializer) });
 }
 
