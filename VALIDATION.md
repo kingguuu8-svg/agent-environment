@@ -63,6 +63,7 @@ node verify_mcp_discovery.mjs
 .venv/bin/python verify_dsh_discovery.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
 .venv/bin/python verify_dsh_context.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
 .venv/bin/python verify_dsh_ownership.py --node /home/kingguuu8/.local/node/bin/node
+.venv/bin/python verify_dsh_creation.py --node /home/kingguuu8/.local/node/bin/node --npm /home/kingguuu8/.local/share/remote-dsh-device/npm
 /home/kingguuu8/.local/node/bin/node verify_dsh_client.mjs
 node verify_dsh_drafts.mjs
 .venv/bin/python verify_dsh_cloud_drafts.py --node /home/kingguuu8/.local/node/bin/node
@@ -563,6 +564,18 @@ vps1__bash
 ~~~
 
 它创建 agent-proof.txt，将 native 替换为 remote，读取并搜索结果，随后执行命令确认目标。独立 MCP 客户端再次读取文件，确认内容为 agent used remote MCP tools 加换行。客户端权限仅开放 demo 的 MCP 工具。
+
+## 跨设备新建恢复
+
+隔离验证确认，新建会话已提交但 HTTP 回复丢失时，旧客户端点击重试会创建两份原生会话。对照使用 `verify_dsh_creation.py --baseline --client-ref 0a6114e`，其余参数与上方命令相同。
+
+本轮客户端在请求前保存自己的会话编号，重试使用 DSH 原生幂等接纳。15 项原生客户端、实际 Host 与 SSH 检查通过，覆盖回复丢失、未送达请求、刷新、多个工作区、身份冲突、并发点击、输入权回复丢失、登录失效、浏览器存储错误与实际重启。另一设备更新过的标题、输入权和草稿保留，恢复窗口进入查看模式；下一次正常新建使用新编号。
+
+两份独立浏览器存储域的十项检查通过。代理只丢弃已经成功提交的新建回复，原生 WebSocket 继续工作；目录面板与工作区加号分别覆盖失联后恢复。B 在未确认的会话上接管并保存草稿，实际 Host 重启后 A 刷新重试恢复同一会话，B 继续保有输入权和文字。两份检查全过程没有模型请求，临时服务、SSH 目标与页面已清理。证据位于 `.local/verification-dsh-creation-{before,verified,ui}.json`。
+
+相关输入权七项、云草稿 15 项及客户端 26 项、原窗口草稿 13 项、输入错误处理四项回归通过。新版只替换 VPS4 客户端文件并保留原件及权限备份；35 个会话日志与投影、26 个输入权记录、七个工作区分组、六份配置、机器清单和云端草稿保持。三台机器的文件与引用检查通过，原网页只读刷新后仍是原会话与查看模式。生产验证没有提交模型请求、接管或切换，部署证据位于 `.local/verification-dsh-creation-recovery-deployed.json`。
+
+恢复编号保存在窗口存储，关窗后的浏览器恢复与 macOS、Windows 真机行为仍待验证。
 
 ## 范围与清理
 

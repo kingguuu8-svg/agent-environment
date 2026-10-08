@@ -203,8 +203,20 @@ window.__ModuleLoader__.load({
       const leases = new Map();
       const referenceTargets = new Map();
       const listeners = new Set();
+      const creationKey = "remote-dsh-pending-creations";
+      const pendingCreations = new Map();
+      try {
+        const saved = JSON.parse(sessionStorage.getItem(creationKey));
+        if (Array.isArray(saved) && saved.every((item) => Array.isArray(item) && item.length === 2 && typeof item[0] === "string" && item[0]
+          && typeof item[1] === "string" && /^session-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(item[1]))) for (const [workspaceId, sessionId] of saved) pendingCreations.set(workspaceId, sessionId);
+      } catch {}
+      const saveCreations = () => {
+        if (pendingCreations.size) sessionStorage.setItem(creationKey, JSON.stringify([...pendingCreations]));
+        else sessionStorage.removeItem(creationKey);
+      };
+      const restoredCreation = [...pendingCreations].at(-1);
       let createOpen = false;
-      let creation = { busy: false, error: "", workspaceId: null };
+      let creation = restoredCreation ? { busy: false, error: "上次新建的结果尚未确认，重试会打开同一会话。", workspaceId: restoredCreation[0], sessionId: restoredCreation[1] } : { busy: false, error: "", workspaceId: null };
       let creatingSession = null;
       let notice = null;
       let noticeTimer;
@@ -236,13 +248,23 @@ window.__ModuleLoader__.load({
       };
       const createInWorkspace = (workspaceId) => {
         if (creatingSession) return creatingSession;
-        const existing = creation.workspaceId === workspaceId ? creation.sessionId : null;
-        creation = { busy: true, error: "", workspaceId, sessionId: existing }; notifyCreation();
+        const sessionId = pendingCreations.get(workspaceId) ?? `session-${crypto.randomUUID()}`;
+        creation = { busy: true, error: "", workspaceId, sessionId }; notifyCreation();
         creatingSession = (async () => {
-          const sessionId = existing ?? await ctx.sessions.create({ workspaceId });
-          creation = { ...creation, sessionId };
+          // Persist the identity before sending. Native DSH adopts that identity
+          // on retry, even if creation committed but its response was lost.
+          pendingCreations.set(workspaceId, sessionId);
+          try { saveCreations(); }
+          catch { throw new Error("无法保存新建会话的恢复信息，请释放浏览器存储空间后重试。"); }
+          await ctx.sessions.create({ workspaceId, sessionId });
           await control(sessionId);
           ctx.uiWorkspace.openSession(sessionId);
+          pendingCreations.delete(workspaceId);
+          try { saveCreations(); }
+          catch {
+            pendingCreations.set(workspaceId, sessionId);
+            showNotice("会话已打开，浏览器暂时无法清除恢复记录。请释放存储空间后重试。", "error");
+          }
           creation = { busy: false, error: "", workspaceId: null };
           return sessionId;
         })().catch((error) => {
@@ -611,7 +633,7 @@ window.__ModuleLoader__.load({
         const message = useSyncExternalStore((listener) => { listeners.add(listener); return () => listeners.delete(listener); }, () => notice);
         const toast = message ? h("div", { className: "rw-status", role: message.kind === "error" ? "alert" : "status" }, message.message) : null;
         const progress = status.busy || status.error ? h("div", { className: "rw-status", role: status.error ? "alert" : "status" },
-          h("span", { className: status.error ? "rw-error" : "rw-meta" }, status.error ? `新建会话失败：${status.error}` : "正在新建会话…"),
+          h("span", { className: status.error ? "rw-error" : "rw-meta" }, status.error ? `新建会话暂未完成：${status.error}` : "正在新建会话…"),
           status.error ? h("button", { className: "rw-button", onClick: () => createInWorkspace(status.workspaceId).catch(() => {}) }, "重试") : null,
           status.error ? h("button", { className: "rw-button", onClick: () => { creation = { busy: false, error: "", workspaceId: null }; notifyCreation(); } }, "关闭") : null) : null;
         if (!open) return progress ?? toast;
