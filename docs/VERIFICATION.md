@@ -11,6 +11,7 @@ sh scripts/setup.sh dsh
 uv run ruff check .
 node worker.mjs --check-manifest
 .venv/bin/python verify_platform.py --dsh
+.venv/bin/python verify_directory_browser.py
 .venv/bin/python verify_environment_access.py
 .venv/bin/python verify_device_onboarding.py
 node verify_dsh_sidebar.mjs
@@ -21,6 +22,8 @@ python3 scripts/build_release.py
 `verify_platform.py` 启动两套真实 SSH 目标，从通用 CLI 初始化独立 Environment，调用 HTTP 与官方 MCP SDK，检查跨设备文件效果、错误凭据、重复 Host 拒绝与重启恢复。`--dsh` 还检查通用模型目录、原生会话创建、机器切换、草稿和输入权恢复。省略该选项可在仅安装 Environment 依赖的源码包上运行。
 
 `verify_environment_access.py` 验证 Host 持有的环境，覆盖全部七个 Pi 工具、图片和编辑数据、请求边界、取消、并发、凭据撤销、错误状态和现有会话保持。`verify_device_onboarding.py` 验证配对权限、重复与并发安装、过期、恢复以及三个操作系统安装包的结构。
+
+`verify_directory_browser.py` 使用真实 SSH 和 Pi 进程，验证目录连接复用、失效后自动恢复、取消和并发，以及恢复期间既有会话的命令继续执行。目录浏览使用独立连接，跳过项目上下文读取；只读目录请求允许恢复后重试一次，模型工具保留原来的执行行为。
 
 `verify_platform.py --dsh --asset-dir /path/to/asset-cache` 可以复用已经下载的官方 fd 归档，准备时仍核对 SHA256。复用依赖缓存与复用个人运行时是不同的验证条件；记录验证结果时应说明资源来源。
 
