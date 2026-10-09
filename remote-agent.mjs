@@ -58,12 +58,15 @@ export async function openWorkspace(options) {
       stderr: "inherit",
     });
   }
+  const opening = new AbortController();
+  const timeout = options.connectTimeout ?? 300000;
+  const timer = setTimeout(() => opening.abort(new Error(`Workspace connection timed out after ${timeout / 1000} seconds`)), timeout);
   try {
-    await client.connect(transport);
+    await client.connect(transport, { signal: opening.signal, timeout });
     const descriptors = [];
     let cursor;
     do {
-      const page = await client.listTools(cursor ? { cursor } : {}, { timeout: 300000 });
+      const page = await client.listTools(cursor ? { cursor } : {}, { timeout, signal: opening.signal });
       descriptors.push(...page.tools);
       cursor = page.nextCursor;
     } while (cursor);
@@ -79,12 +82,15 @@ export async function openWorkspace(options) {
       };
       return context;
     };
-    const context = await fetchContext();
+    // Directory selection only needs the file resource, not Git or project
+    // instructions. Agent connections continue to read their bound context.
+    const context = options.readContext === false ? undefined : await fetchContext(opening.signal);
+    opening.signal.throwIfAborted();
     return { client, descriptors, context, fetchContext, close: () => client.close() };
   } catch (error) {
     await client.close();
-    throw error;
-  }
+    throw opening.signal.aborted ? opening.signal.reason : error;
+  } finally { clearTimeout(timer); }
 }
 
 export async function createRemoteSession(options) {

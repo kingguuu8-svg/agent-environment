@@ -217,6 +217,13 @@ def verify_native_dsh(args, base, workspace, targets, first, second, passed):
             assert duplicate.returncode != 0
             assert (runtime / "dsh-state/environment.json").read_bytes() == registry
             passed("standalone and DSH Hosts share a single registry ownership lock")
+            for machine, ssh in [("first", first), ("second", second)]:
+                path = str(ssh.target_root / "project")
+                listing = api.remote("browse", {"machine": machine, "path": path})
+                assert listing["absolutePath"] == path
+                assert any(entry["name"] == "identity.txt" for entry in listing["entries"])
+            assert (runtime / "dsh-state/environment.json").read_bytes() == registry
+            passed("native DSH directory selection reaches both SSH machines without registering root workspaces")
             catalog = api.rpc("session/modelCatalog", {})
             assert any(group["id"] == "fixture" and any(m["id"] == "portable-fixture" for m in group["models"]) for group in catalog["groups"])
             controller = "portable-" + "a" * 32

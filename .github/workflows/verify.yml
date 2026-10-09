@@ -44,6 +44,7 @@ jobs:
         if: matrix.mode == 'dsh'
         run: |
           .venv/bin/python verify_platform.py --dsh
+          .venv/bin/python verify_directory_browser.py
           .venv/bin/python verify_environment_access.py
           .venv/bin/python verify_device_onboarding.py
           node verify_dsh_sidebar.mjs

@@ -15,6 +15,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import lockfile from "proper-lockfile";
 import mime from "mime-types";
 import { Environment, readJson, writeJson } from "../../environment.mjs";
+import { DirectoryBrowser } from "../../directory-browser.mjs";
 import { startEnvironmentAccess } from "../../environment-access.mjs";
 import { maxBytes as workspaceFileByteLimit } from "../../workspace-files.mjs";
 import { createPiToolDefinition } from "../pi-tool-result.mjs";
@@ -53,6 +54,7 @@ export class RemoteWorkspaces extends TypertRemoteService {
     this.draftsDir = join(this.stateDir, "drafts");
     mkdirSync(this.draftsDir, { recursive: true, mode: 0o700 });
     this.environment = new Environment({ stateDir: this.stateDir, config: config.targets, python: config.python, cloudWorkspace: config.cloudWorkspace });
+    this.directoryBrowser = new DirectoryBrowser(this.environment);
     this.leases = new Map();
     this.authorized = new AsyncLocalStorage();
     this.operations = new Map();
@@ -60,6 +62,7 @@ export class RemoteWorkspaces extends TypertRemoteService {
     this.checkingConnections = new Map();
     this.deviceChecks = new Map();
     ctx.effect(() => () => this.environment.close(), "remote: transports");
+    ctx.effect(() => () => this.directoryBrowser.close(), "remote: directory browser transports");
     ctx.sessionProjections.register({
       key: "remoteBinding", stateVersion: 2, stateSchema: projectionSchema,
       init: (header) => ({ current: this.anchors[header.cwd] ?? (header.cwd === this.environment.get("cloud").workspace ? this.binding("cloud") : null), pending: null, revision: 0 }),
@@ -423,8 +426,7 @@ export class RemoteWorkspaces extends TypertRemoteService {
     const target = this.environment.configuration.targets?.[request.machine];
     const root = target?.platform === "windows" ? win32.parse(request.path || target.workspace).root : "/";
     if (!root) fail("请输入完整目录路径，例如 C:\\Users");
-    const id = await this.environment.register(request.machine, root);
-    return this.fileRequest(id, { op: "list", ...(request.path ? { path: request.path } : {}) }, signal);
+    return this.directoryBrowser.list(request.machine, root, request.path, signal);
   }
   async pick(request, signal) {
     checkRequest(request);
